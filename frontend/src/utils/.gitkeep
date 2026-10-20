@@ -1,0 +1,449 @@
+Vou ler as células do notebook que constroem os dados, para simplificar sem mudar os resultados.
+
+Vou simplificar a construção dos atributos e conferir, com dados sintéticos, que ela dá exatamente os mesmos números da versão que você rodou.
+
+Montei os blocos na ordem dos 8 tópicos que o professor pediu, já com os aprendizados em Markdown. Cada bloco é uma célula: **[MD]** é célula de texto (Markdown) e **[CÓDIGO]** é célula de código.
+
+## O que simplifiquei
+
+- **Troca de A e B:** antes eu trocava coluna por coluna. Agora só inverto o sinal das 5 diferenças e o alvo nos jogos sorteados. O resultado é matematicamente o mesmo, mas a explicação cabe em uma frase. Testei contra a versão anterior com dados sintéticos e os 5 atributos, o alvo e a ordem ficaram idênticos.
+- **Atributos não usados:** removi `n_mapa` e `min_n_mapa` do resultado final.
+- **Experimentos:** os experimentos antigos (todos os anos, 8 atributos, 12 atributos) viram uma **tabela de texto** no tópico 8, sem código.
+- **Resultado:** os números esperados são os mesmos de antes. O TensorFlow pode variar uma casa decimal ao reexecutar, e se isso acontecer você atualiza os números nos textos.
+
+Esta última parte não pude rodar aqui, porque o Kaggle e o TensorFlow não funcionam no meu ambiente. Rode no Colab de cima a baixo e me mande qualquer erro.
+
+---
+
+## Bloco 1 [MD]
+
+```
+# Previsão do vencedor de um mapa de Valorant com uma rede neural (MLP)
+
+**Aluno:** Carlos — FATEC Jacareí, DSM — Redes Neurais Artificiais (P2)
+
+## 1. Problema e motivação
+
+No Valorant, dois times de 5 jogadores disputam cada mapa, e é comum que um time seja forte em uns mapas e fraco em outros. Analistas do circuito profissional (VCT) costumam usar o histórico dos times para projetar quem vence.
+
+**Pergunta do projeto:** só com o histórico dos dois times (antes do mapa começar), é possível prever quem vai vencer melhor do que um palpite aleatório?
+
+**Motivação:** o problema é útil para análise de campeonatos, mas é difícil, porque os times profissionais são parecidos em nível e há muito acaso. Por isso o resultado também precisa ser avaliado com honestidade, e não só pela acurácia.
+```
+
+## Bloco 2 [MD]
+
+```
+## 2. Tipo de tarefa e objetivo do modelo
+
+- **Aprendizado supervisionado:** os dados têm a resposta certa (quem venceu).
+- **Classificação binária:** há duas classes, "o time A venceu" (1) ou "o time A perdeu" (0).
+- **Objetivo do modelo:** receber informações que comparam os dois times antes do mapa e devolver a **probabilidade de o time A vencer**. Se for maior que 50%, a previsão é "A vence".
+```
+
+## Bloco 3 [MD]
+
+```
+## 3. Conjunto de dados
+
+- **Fonte:** [Valorant Champion Tour 2021-2026 (Kaggle)](https://www.kaggle.com/datasets/ryanluong1/valorant-champion-tour-2021-2023-data). Usei o arquivo `maps_scores.csv` de cada ano, que traz um mapa por linha: times, mapa e placar de rounds.
+- **Alvo:** `alvo` = 1 se o time A venceu o mapa, 0 se perdeu.
+- **Amostras:** cada amostra é um mapa. Depois dos tratamentos, ficaram **2.658 mapas** (1.035 treino, 934 validação, 689 teste).
+- **Atributos (5 números, sempre "time A menos time B", calculados só com jogos anteriores):**
+  1. `dif_elo`: diferença de nota Elo. O Elo é uma nota de força: todo time começa em 1500, ganha pontos ao vencer (mais se o adversário era forte) e perde ao perder.
+  2. `dif_taxa_geral`: diferença da % de vitórias em qualquer mapa.
+  3. `dif_forma5`: diferença da % de vitórias nos últimos 5 jogos.
+  4. `dif_taxa_mapa`: diferença da % de vitórias naquele mapa específico.
+  5. `dif_saldo_medio`: diferença do saldo médio de rounds naquele mapa.
+
+### Tratamento dos dados
+- Removi mapas sem nome e empates de placar (não foram jogados ou houve erro de coleta).
+- O dataset não tem coluna de data, então reconstruí a ordem cronológica pelo ano, pela ordem dos torneios e pela ordem das linhas.
+- Calculei os atributos usando **somente jogos anteriores** ao mapa.
+- Mantive só mapas em que cada time já tinha pelo menos 5 jogos no total e 3 naquele mapa.
+- Usei apenas jogos de 2023 em diante (explicação no bloco 10).
+- Dividi **por tempo**: treino 2023-2024, validação 2025, teste 2026.
+- Normalização (padronização): média 0 e desvio 1, calculados só no treino.
+```
+
+## Bloco 4 [CÓDIGO] — imports
+
+```python
+import os
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import kagglehub
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, log_loss
+
+import tensorflow as tf
+from tensorflow import keras
+```
+
+## Bloco 5 [CÓDIGO] — carregar os dados
+
+```python
+# Baixa o dataset (~1,4 GB, pode demorar alguns minutos)
+path = kagglehub.dataset_download("ryanluong1/valorant-champion-tour-2021-2023-data")
+
+# Junta o arquivo de placares por mapa de cada ano
+partes = []
+for ano in range(2021, 2027):
+    d = pd.read_csv(os.path.join(path, f"vct_{ano}", "matches", "maps_scores.csv"))
+    d["Year"] = ano
+    partes.append(d)
+maps = pd.concat(partes, ignore_index=True)
+
+print("Total de mapas:", len(maps))
+maps.head(3)
+```
+
+## Bloco 6 [CÓDIGO] — limpeza e ordem cronológica
+
+```python
+# Limpeza
+df = maps.dropna(subset=["Map"]).copy()                    # mapas sem nome: não foram jogados
+df = df[df["Team A Score"] != df["Team B Score"]].copy()   # empates: não jogados ou erro de coleta
+print(f"{len(maps)} -> {len(df)} mapas")
+
+# Ordem cronológica (o dataset não tem data):
+# anos em ordem; dentro do ano, os torneios aparecem do mais novo para o mais antigo,
+# então invertemos a ordem dos torneios; dentro de cada torneio, as linhas já estão em ordem.
+df["linha_original"] = df.index
+df["inicio"] = df.groupby(["Year", "Tournament"])["linha_original"].transform("min")
+df = df.sort_values(["Year", "inicio", "linha_original"],
+                    ascending=[True, False, True]).reset_index(drop=True)
+df["ordem"] = df.index    # 0 = jogo mais antigo de todos
+
+# Alvo e saldo de rounds (do ponto de vista do time A)
+df["venc_A"] = (df["Team A Score"] > df["Team B Score"]).astype(int)
+df["dif_A"] = df["Team A Score"] - df["Team B Score"]
+```
+
+## Bloco 7 [MD] — aprendizado
+
+```
+### O que aprendi: por que a ordem no tempo importa (vazamento de dados)
+
+Para prever um mapa, o modelo só pode saber o que já tinha acontecido **antes** dele. Se o histórico de um time incluísse jogos futuros, o modelo "veria a resposta" e a acurácia ficaria falsamente alta. Isso se chama **vazamento de dados**.
+
+Por isso fiz duas coisas:
+1. O histórico de cada time usa só jogos anteriores ao mapa.
+2. A divisão treino/validação/teste é **por tempo**: treino no passado, teste no futuro. É como seria na vida real.
+```
+
+## Bloco 8 [CÓDIGO] — função que cria as amostras
+
+```python
+ATRIBUTOS = ["dif_elo", "dif_taxa_geral", "dif_forma5", "dif_taxa_mapa", "dif_saldo_medio"]
+
+def construir_amostras(df, ano_min=2023, min_geral=5, min_mapa=3, semente=42, K=20):
+    """Uma linha por mapa, com os 5 atributos (time A menos time B), usando só jogos anteriores."""
+    d = df[df["Year"] >= ano_min].sort_values("ordem").reset_index(drop=True)
+
+    # 1) Elo de cada time ANTES de cada jogo (e atualização depois do jogo)
+    nota = {}
+    elo_A, elo_B = [], []
+    for a, b, venc in zip(d["Team A"], d["Team B"], d["venc_A"]):
+        ra, rb = nota.get(a, 1500.0), nota.get(b, 1500.0)
+        elo_A.append(ra)
+        elo_B.append(rb)
+        chance_a = 1 / (1 + 10 ** ((rb - ra) / 400))      # chance de A vencer segundo as notas
+        nota[a] = ra + K * (venc - chance_a)
+        nota[b] = rb + K * ((1 - venc) - (1 - chance_a))
+    d["elo_A"], d["elo_B"] = elo_A, elo_B
+
+    # 2) Tabela "longa": cada mapa vira 2 linhas, uma por time
+    A = pd.DataFrame({"ordem": d["ordem"], "Team": d["Team A"], "Map": d["Map"],
+                      "venceu": d["venc_A"], "saldo": d["dif_A"]})
+    B = pd.DataFrame({"ordem": d["ordem"], "Team": d["Team B"], "Map": d["Map"],
+                      "venceu": 1 - d["venc_A"], "saldo": -d["dif_A"]})
+    h = pd.concat([A, B]).sort_values("ordem").reset_index(drop=True)
+
+    # 3) Histórico ANTES de cada jogo (o acumulado inclui o jogo atual, então subtraímos o atual)
+    h["n_geral"] = h.groupby("Team").cumcount()
+    h["n_mapa"] = h.groupby(["Team", "Map"]).cumcount()
+    vit_geral = h.groupby("Team")["venceu"].cumsum() - h["venceu"]
+    vit_mapa = h.groupby(["Team", "Map"])["venceu"].cumsum() - h["venceu"]
+    saldo_mapa = h.groupby(["Team", "Map"])["saldo"].cumsum() - h["saldo"]
+    h["taxa_geral"] = vit_geral / h["n_geral"]
+    h["taxa_mapa"] = vit_mapa / h["n_mapa"]
+    h["saldo_medio"] = saldo_mapa / h["n_mapa"]
+    # forma recente: média dos 5 jogos anteriores (o shift(1) exclui o jogo atual)
+    h["forma5"] = h.groupby("Team")["venceu"].transform(
+        lambda s: s.shift(1).rolling(5, min_periods=5).mean())
+
+    # 4) Volta para uma linha por mapa, com o histórico do time A e do time B
+    cols = ["n_geral", "n_mapa", "taxa_geral", "taxa_mapa", "saldo_medio", "forma5"]
+    hA = h[["ordem", "Team"] + cols].rename(columns={"Team": "Team A", **{c: c + "_A" for c in cols}})
+    hB = h[["ordem", "Team"] + cols].rename(columns={"Team": "Team B", **{c: c + "_B" for c in cols}})
+    u = d[["ordem", "Year", "Team A", "Team B", "venc_A", "elo_A", "elo_B"]]
+    u = u.merge(hA, on=["ordem", "Team A"]).merge(hB, on=["ordem", "Team B"])
+
+    # 5) Só mapas em que os dois times já têm histórico mínimo
+    u = u[(u[["n_geral_A", "n_geral_B"]].min(axis=1) >= min_geral) &
+          (u[["n_mapa_A", "n_mapa_B"]].min(axis=1) >= min_mapa)].copy()
+
+    # 6) Atributos = diferença entre o time A e o time B
+    for m in ["elo", "taxa_geral", "forma5", "taxa_mapa", "saldo_medio"]:
+        u["dif_" + m] = u[m + "_A"] - u[m + "_B"]
+
+    # 7) Em metade dos jogos (sorteio com semente fixa) trocamos A por B:
+    #    o sinal das diferenças inverte e o alvo também. Assim "A" não tem vantagem por ser A.
+    rng = np.random.default_rng(semente)
+    trocar = rng.random(len(u)) < 0.5
+    u.loc[trocar, ATRIBUTOS] = -u.loc[trocar, ATRIBUTOS]
+    u["alvo"] = np.where(trocar, 1 - u["venc_A"], u["venc_A"])
+
+    return u[["ordem", "Year"] + ATRIBUTOS + ["alvo"]].sort_values("ordem").reset_index(drop=True)
+```
+
+## Bloco 9 [CÓDIGO] — amostras, divisão e normalização
+
+```python
+usar = construir_amostras(df)
+print("Amostras:", len(usar), "(esperado: 2658)")
+
+# Divisão por tempo: treino 2023-2024, validação 2025, teste 2026
+usar["particao"] = np.select([usar["Year"] <= 2024, usar["Year"] == 2025],
+                             ["treino", "validacao"], default="teste")
+print(usar["particao"].value_counts())
+print("Fração de alvo=1 por partição:")
+print(usar.groupby("particao")["alvo"].mean().round(3))
+
+treino = usar[usar["particao"] == "treino"]
+val    = usar[usar["particao"] == "validacao"]
+teste  = usar[usar["particao"] == "teste"]
+X_train, y_train = treino[ATRIBUTOS].values, treino["alvo"].values
+X_val,   y_val   = val[ATRIBUTOS].values,    val["alvo"].values
+X_test,  y_test  = teste[ATRIBUTOS].values,  teste["alvo"].values
+
+# Normalização: média e desvio aprendidos SÓ no treino, aplicados nos três conjuntos
+scaler = StandardScaler().fit(X_train)
+X_train_s = scaler.transform(X_train)
+X_val_s   = scaler.transform(X_val)
+X_test_s  = scaler.transform(X_test)
+```
+
+## Bloco 10 [MD] — aprendizados sobre os dados
+
+```
+### O que aprendi com os dados
+
+- **Mudança de era (por que só 2023 em diante):** em 2023 o circuito profissional passou a ter times franqueados no Tier 1. Num primeiro experimento com todos os anos (2021-2026), as curvas de treino e validação se separaram: a rede melhorava no treino e piorava na validação. Os dados de antes e depois de 2023 seguem "regras" diferentes, então restringi aos jogos de 2023 em diante.
+- **Atributos como diferença (A - B):** para saber quem vence, importa a comparação entre os dois times, e não o nível de cada um. Dois times fortes e dois fracos têm a mesma diferença. Isso reduziu de 12 para 5 números e deu um resultado melhor na validação.
+- **Troca aleatória de A e B:** no dataset, o time A vence mais que o B (cerca de 57% no conjunto completo), um viés que não tem a ver com a força do time. Trocando A e B em metade dos jogos, o modelo não aprende esse viés.
+```
+
+## Bloco 11 [CÓDIGO] — referências simples (validação)
+
+```python
+# Modelos simples para servir de comparação ("o MLP precisa superar isto para valer a pena")
+mais_comum = int(np.bincount(y_train).argmax())
+acc_ingenuo = accuracy_score(y_val, np.full(len(y_val), mais_comum))
+acc_regra   = accuracy_score(y_val, (X_val[:, 0] > 0).astype(int))   # regra: vence quem tem Elo maior
+
+# Regressão logística usando só a diferença de Elo (coluna 0)
+lr1 = LogisticRegression(max_iter=1000).fit(X_train_s[:, :1], y_train)
+prob_lr1_val = lr1.predict_proba(X_val_s[:, :1])
+acc_ref  = accuracy_score(y_val, prob_lr1_val.argmax(axis=1))
+loss_ref = log_loss(y_val, prob_lr1_val)
+
+print("Validação:")
+print(f"  Chutar a classe mais comum : {acc_ingenuo:.3f}")
+print(f"  Regra: maior Elo vence     : {acc_regra:.3f}")
+print(f"  Regressão logística (Elo)  : acurácia {acc_ref:.3f} | custo {loss_ref:.3f}")
+```
+
+## Bloco 12 [MD]
+
+```
+## 4. Tipo de rede neural e topologia
+
+Usei uma **MLP (Multilayer Perceptron)**, a rede neural em que cada neurônio de uma camada se liga a todos os da próxima. É adequada porque os dados são uma tabela de números e a saída é uma classificação binária.
+
+**Topologia: 5 → 8 → 1**
+- **Entrada:** 5 neurônios (os 5 atributos).
+- **Camada oculta:** 8 neurônios com ativação **ReLU** (combina os atributos e permite relações não lineares).
+- **Saída:** 1 neurônio com ativação **sigmoide**, que devolve a probabilidade de o time A vencer (entre 0 e 1).
+
+**Por que uma rede tão pequena?** São só ~1.000 amostras de treino. Uma rede grande decoraria o treino (overfitting). Testei uma rede maior no primeiro experimento e ela não ajudou.
+
+**Parâmetros ajustados:** camada oculta (5×8 pesos + 8 vieses = 48) + saída (8×1 pesos + 1 viés = 9) = **57**.
+```
+
+## Bloco 13 [CÓDIGO]
+
+```python
+keras.utils.set_random_seed(42)   # reprodutibilidade
+
+modelo = keras.Sequential([
+    keras.layers.Input(shape=(len(ATRIBUTOS),)),    # 5 atributos
+    keras.layers.Dense(8, activation="relu"),       # camada oculta
+    keras.layers.Dense(1, activation="sigmoid"),    # saída: probabilidade de o time A vencer
+])
+modelo.compile(optimizer=keras.optimizers.Adam(learning_rate=0.001),
+               loss="binary_crossentropy",
+               metrics=["accuracy"])
+modelo.summary()
+```
+
+## Bloco 14 [CÓDIGO] — treinamento
+
+```python
+# Para o treino quando a validação para de melhorar e devolve os melhores pesos
+parada = keras.callbacks.EarlyStopping(monitor="val_loss", patience=15,
+                                       restore_best_weights=True)
+
+hist = modelo.fit(X_train_s, y_train,
+                  validation_data=(X_val_s, y_val),
+                  epochs=200, batch_size=64,
+                  callbacks=[parada], verbose=0)
+
+melhor = int(np.argmin(hist.history["val_loss"]))
+print(f"Parou na época {len(hist.history['loss'])} | melhor época: {melhor + 1}")
+print(f"MLP -> treino: {hist.history['accuracy'][melhor]:.3f} | "
+      f"validação: {hist.history['val_accuracy'][melhor]:.3f} | "
+      f"custo validação: {hist.history['val_loss'][melhor]:.3f}")
+print(f"Ref. logística (Elo) -> validação: {acc_ref:.3f} | custo: {loss_ref:.3f}")
+```
+
+## Bloco 15 [MD]
+
+```
+## 5. Hiperparâmetros do melhor resultado
+
+| Hiperparâmetro | Valor |
+|---|---|
+| Topologia | 5 → 8 → 1 |
+| Parâmetros ajustados | 57 |
+| Ativação (oculta / saída) | ReLU / sigmoide |
+| Função de custo | binary crossentropy |
+| Otimizador | Adam |
+| Taxa de aprendizado | 0,001 |
+| Tamanho do lote (batch) | 64 |
+| Máximo de épocas | 200 |
+| Parada antecipada | monitora o custo de validação, paciência 15, restaura os melhores pesos |
+| Semente aleatória | 42 |
+
+O treino parou na época 68 e a melhor foi a 53 (pesos restaurados).
+```
+
+## Bloco 16 [CÓDIGO] — curvas
+
+```python
+AZUL, LARANJA, CINZA = "#2a78d6", "#eb6834", "#898781"
+
+fig, eixos = plt.subplots(1, 2, figsize=(11, 4))
+for ax, chave, titulo, ref in [(eixos[0], "loss", "Custo (binary crossentropy)", loss_ref),
+                               (eixos[1], "accuracy", "Acurácia", acc_ref)]:
+    ax.plot(hist.history[chave], color=AZUL, label="treino")
+    ax.plot(hist.history["val_" + chave], color=LARANJA, linestyle="--", label="validação")
+    ax.axhline(ref, color=CINZA, linestyle=":", label="regressão logística (validação)")
+    ax.axvline(melhor, color=CINZA, linewidth=0.8)
+    ax.set_title(titulo)
+    ax.set_xlabel("época")
+    ax.grid(color="#e1e0d9")
+    ax.legend()
+plt.tight_layout()
+plt.show()
+```
+
+## Bloco 17 [MD]
+
+```
+## 6. Análise das curvas de aprendizado
+
+- **Custo:** as curvas de treino e validação descem juntas e se encontram perto de 0,673. Não há distância entre elas, então **não houve overfitting**.
+- **Acurácia:** sobe nas primeiras ~35 épocas e estabiliza perto de 58%, com treino e validação quase iguais (0,586 e 0,587 na melhor época).
+- **Parada:** a melhor época foi a 53, e o EarlyStopping parou na 68, depois de 15 épocas sem melhora.
+- **Comparação:** a linha pontilhada é a regressão logística com só a diferença de Elo (validação 0,563; custo 0,671). A curva de custo do MLP praticamente encosta nela, o que indica que a rede aprendeu essencialmente o mesmo que o modelo simples.
+```
+
+## Bloco 18 [CÓDIGO] — teste
+
+```python
+# Avaliação FINAL no teste (2026). Rodar UMA vez, sem ajustar nada depois.
+prob_mlp = modelo.predict(X_test_s, verbose=0).ravel()
+acc_mlp  = accuracy_score(y_test, (prob_mlp > 0.5).astype(int))
+loss_mlp = log_loss(y_test, prob_mlp)
+
+prob_lr1 = lr1.predict_proba(X_test_s[:, :1])
+acc_lr1  = accuracy_score(y_test, prob_lr1.argmax(axis=1))
+loss_lr1 = log_loss(y_test, prob_lr1)
+
+acc_elo     = accuracy_score(y_test, (X_test[:, 0] > 0).astype(int))
+acc_maioria = accuracy_score(y_test, np.full(len(y_test), mais_comum))
+margem = 1.96 * np.sqrt(0.25 / len(y_test)) * 100
+
+print(f"Mapas no teste: {len(y_test)} (margem de erro de cerca de ±{margem:.1f} pontos)\n")
+print(f"Chutar a classe mais comum : {acc_maioria:.3f}")
+print(f"Regra: maior Elo vence     : {acc_elo:.3f}")
+print(f"Regressão logística (Elo)  : acurácia {acc_lr1:.3f} | custo {loss_lr1:.3f}")
+print(f"MLP 5->8->1                : acurácia {acc_mlp:.3f} | custo {loss_mlp:.3f}  (chute 50/50 = {np.log(2):.3f})")
+```
+
+## Bloco 19 [MD]
+
+```
+## 7. Desempenho no conjunto de teste (2026, nunca visto no treino)
+
+| Modelo | Acurácia | Custo |
+|---|---|---|
+| Chutar a classe mais comum | 0,509 | - |
+| Regra: maior Elo vence | 0,579 | - |
+| Regressão logística (só Elo) | 0,575 | 0,681 |
+| **MLP 5→8→1** | **0,598** | **0,679** |
+
+- O MLP acertou **59,8%** dos 689 mapas, contra 50,9% de quem chuta a classe mais comum: cerca de 9 pontos acima do acaso. O custo (0,679) também ficou abaixo do chute 50/50 (0,693).
+- A margem de erro com 689 amostras é de ±3,7 pontos. A diferença do MLP para a regressão logística (2,3 pontos) e para a regra do Elo (1,9 ponto) está **dentro dessa margem**, então não dá para afirmar que o MLP é melhor que eles.
+- **Conclusão:** o histórico dos times permite prever o vencedor acima do acaso. Quase todo o poder preditivo vem da diferença de Elo, e a rede neural não encontrou muito além disso.
+```
+
+## Bloco 20 [MD]
+
+```
+## 8. Outras informações relevantes
+
+### Caminho dos experimentos (validação)
+
+| Experimento | Dados | Atributos | Resultado na validação |
+|---|---|---|---|
+| 1 | 2021-2026, 10.118 mapas, divisão 70/15/15 | 8 (retrospecto de A e B, sem Elo) | MLP 8→16→8→1 (289 parâmetros): acurácia 0,564, custo 0,678. Regressão logística: 0,567. Curvas de treino e validação se separaram (overfitting) |
+| 2 | só 2023+, 2.658 mapas | 8 atributos | Regressão logística: 0,552, custo 0,691 (praticamente o acaso) |
+| 2b | só 2023+ | 12 atributos (+ forma recente e Elo) | Regressão logística: 0,551, custo 0,690. Mais overfitting, sem ganho |
+| 3 | só 2023+ | só dif_elo (1 atributo) | Regressão logística: 0,563, custo 0,671 |
+| 3b | só 2023+ | 5 diferenças | Regressão logística: 0,567, custo 0,671 |
+| 3c | só 2023+ | 5 diferenças + confiabilidade no mapa | 0,542, custo 0,683: **piorou, descartado** |
+| **Final** | só 2023+ | 5 diferenças | **MLP 5→8→1: acurácia 0,587, custo 0,673** |
+
+### Aprendizados
+- Mais atributos não significa melhor resultado: com poucos dados, atributos extras viram ruído e a rede decora o treino.
+- A comparação com modelos simples (regra do Elo, regressão logística) é essencial. Sem ela, 59,8% pareceria mais impressionante do que é.
+- Com ~700 amostras, diferenças de 2 pontos entre modelos não são distinguíveis do acaso.
+- O Elo, que resume o histórico considerando a força dos adversários, foi o atributo mais informativo.
+
+### Limitações
+- A ordem cronológica foi reconstruída (o dataset não tem data).
+- Só entram mapas em que os dois times já tinham histórico mínimo (5 jogos no total e 3 no mapa).
+- O sinal é fraco: no Tier 1 os times são parecidos e um mapa tem muito acaso.
+- O histórico não inclui escalação, agentes jogados, forma individual nem informação de estratégia.
+- Os resultados podem variar um pouco ao reexecutar (aleatoriedade do treinamento).
+```
+
+---
+
+## Para você estudar para a prova
+
+Das 20 células, só 4 têm lógica difícil: blocos 6, 8, 13 e 14. Se quiser, eu faço uma "cola" de 1 página só com a explicação linha a linha dessas quatro, em linguagem simples. O resto é texto que você já viu aqui.
+
+## Próximo passo
+
+Quando você rodar e os números baterem (2.658 amostras, ~0,598 no teste), vemos se dá para melhorar a previsão sem complicar. Já tenho em mente duas ideias simples:
+- **Avaliar só os jogos em que o modelo está confiante**, o que costuma mostrar uma acurácia bem maior que a média.
+- **Testar 5 sementes diferentes** para saber se o 59,8% é estável ou foi sorte.
+
+Rode primeiro, e me diga se algum bloco deu erro ou se algum número saiu diferente.
