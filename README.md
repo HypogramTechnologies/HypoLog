@@ -57,10 +57,9 @@ O **HypoLog** resolve esse desafio por meio de um ecossistema integrado:
 
 ## 🛠️ Tecnologias Utilizadas
 * **Ciência de Dados / ML:** Python, Pandas, Scikit-learn, Jupyter Notebook.
-* **API de Predição:** FastAPI.
-* **Backend:** Node.js, Express, TypeScript.
-* **Frontend:** React.
-* **Documentação da API:** Swagger / OpenAPI.
+* **Backend / API:** Python, FastAPI, Pandas, PyArrow (Parquet).
+* **Frontend:** React, TypeScript, Vite.
+* **Documentação da API:** Swagger / OpenAPI (gerado automaticamente pela FastAPI).
 * **Infraestrutura:** Docker (Conteinerização) e deploy em nuvem.
 * **DevOps:** Git (Git Flow) e Pipeline de CI/CD (GitHub Actions).
 
@@ -76,16 +75,74 @@ A documentação do pipeline de dados, do treinamento e das métricas de avalia�
 
 ## 🚀 Como Executar o Projeto
 
+### Pré-requisitos
+
+* [Python 3.12+](https://www.python.org/downloads/)
+* [Node.js 20+](https://nodejs.org/)
+* Conta no [Kaggle](https://www.kaggle.com/) com token de API (`kaggle.json` em `~/.kaggle/` ou `C:\Users\<usuario>\.kaggle\`)
+
 ```bash
 # Clone este repositório
 git clone https://github.com/HypogramTechnologies/HypoLog.git
-
-# Acesse a pasta do projeto
 cd HypoLog
-
-# Inicie o ambiente com Docker
-docker-compose up -d
 ```
+
+### ⚙️ Backend (API)
+
+```bash
+cd backend
+
+# 1. Crie e ative o ambiente virtual
+python -m venv .venv
+.venv\Scripts\Activate.ps1      # Windows (PowerShell)
+# source .venv/bin/activate     # Linux / macOS
+
+# 2. Instale as dependências
+pip install -r requirements.txt
+
+# 3. Crie o arquivo de variáveis de ambiente
+cp .env.example .env
+
+# 4. Baixe a base da Olist e gere os arquivos processados (apenas na primeira vez)
+python scripts/download_data.py
+python -m scripts.build_dataset
+
+# 5. Inicie a API
+uvicorn app.main:app --reload
+```
+
+A API estará disponível em `http://localhost:8000`.
+
+| Recurso | URL |
+|---|---|
+| Swagger (documentação interativa) | http://localhost:8000/docs |
+| ReDoc | http://localhost:8000/redoc |
+| Especificação OpenAPI (JSON) | http://localhost:8000/openapi.json |
+| Health check | http://localhost:8000/health |
+
+> Os CSVs ficam em `backend/data/raw/` (fora do Git). O passo 4 gera `deliveries.parquet` e `cities.parquet` em `backend/data/processed/`, que são os arquivos carregados pela API.
+
+### 🖥️ Frontend
+
+```bash
+cd frontend
+
+npm install
+cp .env.example .env   # VITE_API_URL=http://localhost:8000/api/v1
+npm run dev
+```
+
+A aplicação estará disponível em `http://localhost:5173`.
+
+### 📡 Endpoints
+
+| Método | Rota | Descrição |
+|---|---|---|
+| `GET` | `/api/v1/cities` | Cidades de destino para seleção (busca por nome e UF) |
+| `GET` | `/api/v1/deliveries/overview` | Total de pedidos, atrasos, taxa de atraso, tempo médio de entrega e pontos do mapa de calor |
+| `GET` | `/api/v1/routes/critical` | Ranking das rotas (origem → destino) com maior taxa de atraso para uma cidade de destino |
+
+> 🐳 A execução com Docker será adicionada nas próximas sprints.
 
 ---
 
@@ -149,8 +206,8 @@ docker-compose up -d
 | :--- | :--- |
 | **Adson Ottoni Balbino Filho** | Developer |
 | **Andressa Stephane Toledo da Silva** | Developer |
-| **Carlos Eduardo da Silva Magalhães** | Developer |
-| **Eduardo Henrique Alves Arantes** | Developer |
+| **Carlos Eduardo da Silva Magalhães** | Scrum Master e Developer |
+| **Eduardo Henrique Alves Arantes** | PO e Developer |
 | **João Pedro Souza dos Anjos** | Developer |
 
 ---
