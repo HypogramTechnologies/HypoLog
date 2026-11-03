@@ -207,8 +207,8 @@ A aplicação estará disponível em `http://localhost:5173`.
 | **Adson Ottoni Balbino Filho** | Developer |
 | **Andressa Stephane Toledo da Silva** | Developer |
 | **Carlos Eduardo da Silva Magalhães** | Scrum Master e Developer |
-| **Eduardo Henrique Alves Arantes** | PO e Developer |
-| **João Pedro Souza dos Anjos** | Developer |
+| **Eduardo Henrique Alves Arantes** | Developer |
+| **João Pedro Souza dos Anjos** | PO e Developer |
 
 ---
 
