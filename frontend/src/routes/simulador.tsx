@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { SimulatorPage } from "@/components/hypogram/simulator-page";
+import { SimulatorPage } from "@/pages/simulator-page";
 import { pageHead } from "@/lib/hypogram-data";
 export const Route = createFileRoute("/simulador")({
   head: () =>

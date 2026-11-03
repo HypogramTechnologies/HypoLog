@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Box,
   Check,
@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { downloadCsv } from "@/lib/hypogram-data";
-import { AppShell, PageHeading, PanelHeading, RiskPill } from "./shared";
+import { AppShell, PageHeading, PanelHeading, RiskPill } from "../components/hypogram/shared";
 import { toast } from "sonner";
 import { CalendarDays } from "lucide-react";
 import { Calendar } from "@/components/ui/calendar";
@@ -27,12 +27,12 @@ const initial = {
   width: "30",
   length: "40",
   days: "10",
-  value: "249.90",
 };
 export function SimulatorPage() {
   const [form, setForm] = useState(initial);
   const [result, setResult] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const pendingSimulation = useRef<ReturnType<typeof setTimeout> | null>(null);
   const toIso = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
@@ -42,9 +42,25 @@ export function SimulatorPage() {
 
   const [date, setDate] = useState(() => toIso(new Date()));
   const [open, setOpen] = useState(false);
-  const set = (key: keyof typeof initial, value: string) => {
-    setForm((s) => ({ ...s, [key]: value }));
+  useEffect(
+    () => () => {
+      if (pendingSimulation.current !== null) {
+        clearTimeout(pendingSimulation.current);
+      }
+    },
+    [],
+  );
+  const invalidateSimulation = () => {
+    if (pendingSimulation.current !== null) {
+      clearTimeout(pendingSimulation.current);
+      pendingSimulation.current = null;
+    }
+    setLoading(false);
     setResult(null);
+  };
+  const set = (key: keyof typeof initial, value: string) => {
+    invalidateSimulation();
+    setForm((s) => ({ ...s, [key]: value }));
   };
   const field = (key: keyof typeof initial, label: string, type = "number") => (
     <div className="field">
@@ -64,8 +80,9 @@ export function SimulatorPage() {
   );
   const submit = (e: FormEvent) => {
     e.preventDefault();
+    invalidateSimulation();
     setLoading(true);
-    setTimeout(() => {
+    pendingSimulation.current = setTimeout(() => {
       const dest = Number(form.destination.replace(/\D/g, "").slice(0, 2));
       const origin = Number(form.origin.replace(/\D/g, "").slice(0, 2));
       const geographic = Math.abs(dest - origin) * 0.65;
@@ -77,6 +94,7 @@ export function SimulatorPage() {
       );
       setResult(score);
       setLoading(false);
+      pendingSimulation.current = null;
       toast.success("Simulação de risco de atraso concluída.");
     }, 800);
   };
@@ -114,7 +132,6 @@ export function SimulatorPage() {
             </h3>
             <div className="field-grid">
               {field("weight", "Peso (kg)")}
-              {field("value", "Valor do pedido (R$)")}
               {field("height", "Altura (cm)")}
               {field("width", "Largura (cm)")}
               {field("length", "Comprimento (cm)")}
@@ -151,6 +168,7 @@ export function SimulatorPage() {
                       fixedWeeks
                       onSelect={(d) => {
                         if (d) {
+                          invalidateSimulation();
                           setDate(toIso(d));
                           setOpen(false);
                         }
@@ -175,8 +193,10 @@ export function SimulatorPage() {
               size="icon"
               aria-label="Limpar simulação"
               onClick={() => {
+                invalidateSimulation();
                 setForm(initial);
-                setResult(null);
+                setDate(toIso(new Date()));
+                setOpen(false);
               }}
             >
               <RotateCcw />
