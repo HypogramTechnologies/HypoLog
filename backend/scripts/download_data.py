@@ -15,6 +15,7 @@ FILES = [
     "olist_customers_dataset.csv",
     "olist_sellers_dataset.csv",
     "olist_geolocation_dataset.csv",
+    "olist_products_dataset.csv",
 ]
 
 

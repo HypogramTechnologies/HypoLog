@@ -2,6 +2,7 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# backend/ (config.py -> core -> app -> backend)
 BASE_DIR = Path(__file__).resolve().parents[2]
 
 
@@ -17,6 +18,7 @@ class Settings(BaseSettings):
     api_prefix: str = "/api/v1"
     deliveries_path: Path = Path("data/processed/deliveries.parquet")
     cities_path: Path = Path("data/processed/cities.parquet")
+    model_path: Path = Path("models/delay_model.joblib")
     cors_origins: list[str] = ["http://localhost:5173"]
 
     @property
@@ -26,6 +28,10 @@ class Settings(BaseSettings):
     @property
     def cities_file(self) -> Path:
         return _resolve(self.cities_path)
+
+    @property
+    def model_file(self) -> Path:
+        return _resolve(self.model_path)
 
 
 settings = Settings()
