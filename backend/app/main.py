@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.exceptions import NotFoundError
-from app.routers import cities, deliveries, routes
+from app.routers import cities, deliveries, routes, reports
 
 
 @asynccontextmanager
@@ -18,7 +18,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title=settings.app_name, version="0.1.0", lifespan=lifespan)
+app = FastAPI(
+    title=settings.app_name,
+    version="0.1.0",
+    lifespan=lifespan
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,6 +30,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(NotFoundError)
+async def not_found_handler(request: Request, exc: NotFoundError):
+    return JSONResponse(
+        status_code=404,
+        content={"detail": str(exc)}
+    )
 
 
 @app.get("/health", tags=["Health"])
@@ -40,3 +52,4 @@ def health():
 app.include_router(cities.router, prefix=settings.api_prefix)
 app.include_router(deliveries.router, prefix=settings.api_prefix)
 app.include_router(routes.router, prefix=settings.api_prefix)
+app.include_router(reports.router, prefix=settings.api_prefix)

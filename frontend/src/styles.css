@@ -994,7 +994,6 @@ tbody tr:hover {
   text-decoration: none;
 }
 
-
 .city-heat {
   fill: currentColor;
   opacity: 0.12;
@@ -1042,7 +1041,6 @@ tbody tr:hover {
   stroke-dasharray: none;
 }
 
-
 .filters-map {
   display: flex;
   align-items: center;
@@ -1082,4 +1080,3 @@ tbody tr:hover {
     width: auto;
   }
 }
-

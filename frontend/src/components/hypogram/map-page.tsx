@@ -37,8 +37,8 @@ const holidayModifiersClassNames = {
 };
 
 type CitySource = "demo" | "csv";
-const MIN_DATA_DATE = "2016-09-04";
-const MAX_DATA_DATE = "2018-10-17";
+const MIN_DATA_DATE = "2016-09-15";
+const MAX_DATA_DATE = "2018-08-29";
 
 export function MapPage() {
   const minDataDate = fromIso(MIN_DATA_DATE);
