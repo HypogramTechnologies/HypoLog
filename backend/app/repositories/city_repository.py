@@ -22,3 +22,7 @@ class CityRepository:
 
     def find_by_ids(self, city_ids) -> pd.DataFrame:
         return self._df[self._df["city_id"].isin(city_ids)]
+
+    def get_by_key(self, city_key: str, state_code: str) -> dict | None:
+        rows = self._df[(self._df["city_key"] == city_key) & (self._df["state_code"] == state_code)]
+        return None if rows.empty else rows.iloc[0].to_dict()
