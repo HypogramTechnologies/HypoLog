@@ -33,8 +33,7 @@ import {
 } from "@/components/ui/dialog";
 import { Toaster, toast } from "sonner";
 import { downloadCsv, orders, riskLabel, riskLevel, type Order } from "@/lib/hypogram-data";
-import hypologLogo from "../../assets/hypolog_logo2.png";
-
+import hypologLogo from "../../assets/hypolog_logo.png";
 const nav = [
   { to: "/" as const, label: "Visão geral", icon: LayoutDashboard },
   { to: "/mapa" as const, label: "Mapa de risco", icon: MapPinned },

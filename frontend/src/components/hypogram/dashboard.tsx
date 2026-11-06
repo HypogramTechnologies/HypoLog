@@ -27,8 +27,8 @@ import { cities, number, orders, trends, type Order } from "@/lib/hypogram-data"
 import { AppShell, ExportButton, Kpi, OrderDetail, PageHeading, PanelHeading } from "./shared";
 import { BrazilMap, MapLegend } from "./brazil-map";
 
-const MIN_DATA_DATE = "2016-09-04";
-const MAX_DATA_DATE = "2018-10-17";
+const MIN_DATA_DATE = "2016-09-15";
+const MAX_DATA_DATE = "2018-08-29";
 
 function toIso(date: Date) {
   const year = date.getFullYear();

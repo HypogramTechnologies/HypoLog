@@ -19,9 +19,9 @@ A complexidade logística do país — dimensões continentais, diversidade de r
 O **HypoLog** resolve esse desafio por meio de um ecossistema integrado:
 
 * **Mapa de Calor de Gargalos:** Visualização espacial das regiões, rotas e cidades com maiores índices históricos e preditivos de atraso.
-* **Predição de Risco de Atraso:** Um modelo de classificação treinado com a base Olist calcula a probabilidade de atraso de um envio a partir de variáveis como distância, peso, prazo estimado e histórico da transportadora.
-* **Simulador de Envios:** O gestor informa os dados de um novo pedido (CEP de origem/destino, dimensões, peso, transportadora) e recebe o diagnóstico de risco instantaneamente.
-* **Dashboard de KPIs:** Indicadores consolidados de pontualidade (*on-time delivery*), tempo médio de trânsito versus prazo prometido e eficiência por parceiro logístico.
+* **Predição de Risco de Atraso:** Um modelo de classificação treinado com a base Olist calcula a probabilidade de atraso de um envio a partir de variáveis como distância, peso, volume, prazo prometido, mês da compra e histórico de atrasos da zona de destino e da cidade de origem.
+* **Simulador de Envios:** O gestor informa os dados de um novo pedido (CEP de origem/destino, dimensões, peso, prazo prometido e data) e recebe o diagnóstico de risco instantaneamente.
+* **Dashboard de KPIs:** Indicadores consolidados de pontualidade (*on-time delivery*), tempo médio de trânsito versus prazo prometido e ranking das rotas mais críticas.
 * **Consulta e Exportação:** Filtros sobre a base histórica e exportação de relatórios analíticos em CSV ou PDF.
 
 ---
@@ -42,6 +42,10 @@ O **HypoLog** resolve esse desafio por meio de um ecossistema integrado:
 * **RNF03**: Documentação do pipeline de dados, treinamento, validação e métricas do modelo (**ROC-AUC, Precision, Recall e F1-Score**).
 * **RNF04**: Interface responsiva e consultas ao mapa e predições com tempo de resposta adequado, mesmo em grandes volumes de dados.
 
+> **Observação:** a base da Olist não identifica a transportadora de cada pedido. Nos requisitos
+> que a mencionam, o sistema usa a **cidade de origem (vendedor)** e a **rota origem → destino**
+> como referência do parceiro logístico.
+
 ---
 
 ## 👥 User Stories
@@ -49,7 +53,7 @@ O **HypoLog** resolve esse desafio por meio de um ecossistema integrado:
 * **RF01**: Como analista de logística, quero filtrar os pedidos históricos por período, estado e transportadora para investigar onde os atrasos se concentram.
 * **RF02**: Como desenvolvedor de um sistema parceiro, quero consumir um endpoint de predição para integrar o score de risco de atraso ao meu fluxo de despacho.
 * **RF03**: Como gestor de logística, quero visualizar um mapa de calor das regiões críticas para priorizar ações nas rotas com mais gargalos.
-* **RF04**: Como gestor de logística, quero simular um novo envio informando CEPs, peso e transportadora para saber o risco de atraso antes de despachar o pedido.
+* **RF04**: Como gestor de logística, quero simular um novo envio informando CEPs, peso, dimensões e prazo para saber o risco de atraso antes de despachar o pedido.
 * **RF05**: Como gestor de varejo digital, quero acompanhar a taxa de pontualidade e a eficiência de cada transportadora para negociar melhores condições com os parceiros.
 * **RF06**: Como gestor, quero exportar relatórios em CSV ou PDF para compartilhar os resultados com a diretoria.
 
@@ -107,7 +111,11 @@ cp .env.example .env
 python scripts/download_data.py
 python -m scripts.build_dataset
 
-# 5. Inicie a API
+# 5. (Opcional) Treine o modelo de previsão de atrasos
+#    O modelo treinado já está versionado em backend/models/. Rode só para retreinar.
+python -m scripts.train_model
+
+# 6. Inicie a API
 uvicorn app.main:app --reload
 ```
 
@@ -121,6 +129,10 @@ A API estará disponível em `http://localhost:8000`.
 | Health check | http://localhost:8000/health |
 
 > Os CSVs ficam em `backend/data/raw/` (fora do Git). O passo 4 gera `deliveries.parquet` e `cities.parquet` em `backend/data/processed/`, que são os arquivos carregados pela API.
+>
+> O treino gera, em `backend/models/`, o modelo (`delay_model.joblib`), as métricas
+> (`metrics.json`) e as previsões do período de teste (`test_predictions.parquet`).
+> Sem o modelo, a API sobe normalmente, mas a rota `/predictions` responde 503.
 
 ### 🖥️ Frontend
 
@@ -141,6 +153,24 @@ A aplicação estará disponível em `http://localhost:5173`.
 | `GET` | `/api/v1/cities` | Cidades de destino para seleção (busca por nome e UF) |
 | `GET` | `/api/v1/deliveries/overview` | Total de pedidos, atrasos, taxa de atraso, tempo médio de entrega e pontos do mapa de calor |
 | `GET` | `/api/v1/routes/critical` | Ranking das rotas (origem → destino) com maior taxa de atraso para uma cidade de destino |
+| `POST` | `/api/v1/predictions` | Prevê a probabilidade e a faixa de risco de atraso de um envio |
+
+### 🤖 Modelo de Previsão
+
+Random Forest que estima a probabilidade de atraso de um envio a partir de distância, prazo
+prometido, peso, volume, calendário e do histórico de atrasos da zona de destino (cidade
+dividida em até 4 faixas de CEP) e da cidade de origem.
+
+| Notebook | Conteúdo |
+|---|---|
+| `ml/notebooks/01_exploracao.ipynb` | Volume de pedidos, atrasos, envios elegíveis e divisão temporal |
+| `ml/notebooks/02_modelo.ipynb` | Métricas (ROC-AUC, Precision, Recall, F1), curvas, matriz de confusão e importância das features |
+
+Para abrir os notebooks, instale o kernel no ambiente do backend e selecione o `backend/.venv`:
+
+```bash
+pip install ipykernel matplotlib
+```
 
 > 🐳 A execução com Docker será adicionada nas próximas sprints.
 
