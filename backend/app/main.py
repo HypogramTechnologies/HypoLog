@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.core.config import settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, InvalidInputError, ModelUnavailableError
 from app.routers import cities, deliveries, routes, predictions, reports
 
 
