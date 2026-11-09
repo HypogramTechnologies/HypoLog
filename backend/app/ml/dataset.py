@@ -1,7 +1,7 @@
 """Monta, a partir dos CSVs da Olist, a base de envios usada no treino do modelo.
 
 Um envio = (pedido, vendedor). Cada linha sai no formato de INPUT_COLUMNS
-(features.py) + a coluna alvo `is_delayed`.
+(features.py) + `is_delayed` e `delivery_days` (usados só no treino).
 """
 
 from pathlib import Path
@@ -58,7 +58,9 @@ def build_shipments(raw: dict[str, pd.DataFrame], zip_table: pd.DataFrame) -> pd
     purchase_day = df["purchase_date"].dt.normalize()
     estimated_day = df["order_estimated_delivery_date"].dt.normalize()
     df["promised_days"] = (estimated_day - purchase_day).dt.days
-    df["is_delayed"] = (df["order_delivered_customer_date"].dt.normalize() > estimated_day).astype(int)
+    delivered_day = df["order_delivered_customer_date"].dt.normalize()
+    df["delivery_days"] = (delivered_day - purchase_day).dt.days  # dias reais da compra à entrega
+    df["is_delayed"] = (delivered_day > estimated_day).astype(int)
 
     # 3. Elegibilidade (mesmos critérios do notebook 01)
     eligible = (

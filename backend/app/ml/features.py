@@ -24,7 +24,11 @@ INPUT_COLUMNS = [
     "n_items",          # quantidade de itens
 ]
 
-N_ZONES = 4
+# Zonas de CEP por cidade: quanto maior a cidade, mais zonas.
+# Cada zona precisa de pedidos suficientes para a taxa de atraso ser confiável.
+MIN_ORDERS_PER_ZONE = 300    # pedidos mínimos (no treino) em cada zona
+MIN_PREFIXES_PER_ZONE = 2    # prefixos de CEP mínimos em cada zona
+MAX_ZONES = 8
 SMOOTHING = 20  # quantos pedidos "fictícios" com a taxa global somamos a cada grupo
 STATES = sorted(BRAZIL_STATES)
 
@@ -36,9 +40,23 @@ def haversine_km(lat1, lng1, lat2, lng2) -> np.ndarray:
     return 6371 * 2 * np.arcsin(np.sqrt(a))
 
 
+def zones_for_city(orders: int, prefixes: int) -> int:
+    """Nº de zonas de uma cidade: 1 para cidades pequenas, até MAX_ZONES para as grandes."""
+    n = min(orders // MIN_ORDERS_PER_ZONE, prefixes // MIN_PREFIXES_PER_ZONE)
+    return int(np.clip(n, 1, MAX_ZONES))
+
+
+ZONE_KEYS = ["dest_city", "dest_state", "destination_zone"]
+ORIGIN_KEYS = ["origin_city", "origin_state"]
+MAX_DAYS_FOR_STATS = 60  # entregas muito longas (outliers) são limitadas nas médias de dias
+
+
 class FeatureBuilder:
-    """Aprende, com os dados de treino, as zonas de CEP e os históricos de atraso,
-    e transforma envios em features numéricas para o Random Forest."""
+    """Aprende, com os dados de treino, as zonas de CEP e os históricos de atraso e de
+    tempo de entrega, e transforma envios em features numéricas para o modelo.
+
+    No treino, o DataFrame de `fit`/`fit_transform` precisa ter também a coluna
+    `delivery_days` (dias reais até a entrega). Na predição (`transform`) ela não é usada."""
 
     def __init__(self, zip_table: pd.DataFrame):
         """zip_table: índice = prefixo de CEP; colunas lat, lng, city_key, state.
@@ -47,16 +65,23 @@ class FeatureBuilder:
         self.zone_bounds: dict[tuple[str, str], np.ndarray] = {}
         self.zone_rates: pd.Series | None = None
         self.origin_rates: pd.Series | None = None
+        self.zone_days: pd.Series | None = None
+        self.origin_days: pd.Series | None = None
         self.global_rate: float | None = None
+        self.global_days: float | None = None
 
     # ================================================================ aprender
     def fit(self, df: pd.DataFrame, y: pd.Series) -> "FeatureBuilder":
         base = self._add_geography(df)
         self._fit_zones(base)
         base["destination_zone"] = self._assign_zones(base)
+        days = self._days(df)
         self.global_rate = float(y.mean())
-        self.zone_rates = self._smoothed_rates(base, y, ["dest_city", "dest_state", "destination_zone"])
-        self.origin_rates = self._smoothed_rates(base, y, ["origin_city", "origin_state"])
+        self.global_days = float(days.mean())
+        self.zone_rates = self._smoothed_rates(base, y, ZONE_KEYS)
+        self.origin_rates = self._smoothed_rates(base, y, ORIGIN_KEYS)
+        self.zone_days = self._smoothed_rates(base, days, ZONE_KEYS, self.global_days)
+        self.origin_days = self._smoothed_rates(base, days, ORIGIN_KEYS, self.global_days)
         return self
 
     def fit_transform(self, df: pd.DataFrame, y: pd.Series, n_splits: int = 5) -> pd.DataFrame:
@@ -67,22 +92,25 @@ class FeatureBuilder:
 
         base = self._add_geography(df)
         base["destination_zone"] = self._assign_zones(base)
-        zone_keys = ["dest_city", "dest_state", "destination_zone"]
-        origin_keys = ["origin_city", "origin_state"]
+        days = self._days(df)
 
         for train_idx, fold_idx in KFold(n_splits, shuffle=True, random_state=42).split(base):
-            part, part_y = base.iloc[train_idx], y.iloc[train_idx]
-            fold = base.iloc[fold_idx]
-            global_rate = float(part_y.mean())
-            zone = self._smoothed_rates(part, part_y, zone_keys, global_rate)
-            origin = self._smoothed_rates(part, part_y, origin_keys, global_rate)
-            features.iloc[fold_idx, features.columns.get_loc("zone_delay_rate")] = (
-                self._lookup(fold, zone, zone_keys, global_rate)
-            )
-            features.iloc[fold_idx, features.columns.get_loc("origin_delay_rate")] = (
-                self._lookup(fold, origin, origin_keys, global_rate)
-            )
+            part, fold = base.iloc[train_idx], base.iloc[fold_idx]
+            part_y, part_days = y.iloc[train_idx], days.iloc[train_idx]
+            g_rate, g_days = float(part_y.mean()), float(part_days.mean())
+            encodings = {
+                "zone_delay_rate": (self._smoothed_rates(part, part_y, ZONE_KEYS, g_rate), ZONE_KEYS, g_rate),
+                "origin_delay_rate": (self._smoothed_rates(part, part_y, ORIGIN_KEYS, g_rate), ORIGIN_KEYS, g_rate),
+                "zone_days": (self._smoothed_rates(part, part_days, ZONE_KEYS, g_days), ZONE_KEYS, g_days),
+                "origin_days": (self._smoothed_rates(part, part_days, ORIGIN_KEYS, g_days), ORIGIN_KEYS, g_days),
+            }
+            for column, (table, keys, default) in encodings.items():
+                features.iloc[fold_idx, features.columns.get_loc(column)] = self._lookup(fold, table, keys, default)
         return features
+
+    @staticmethod
+    def _days(df: pd.DataFrame) -> pd.Series:
+        return df["delivery_days"].astype(float).clip(upper=MAX_DAYS_FOR_STATS)
 
     # ============================================================== transformar
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -105,10 +133,10 @@ class FeatureBuilder:
         features["n_items"] = base["n_items"].astype(float)
         features["purchase_month"] = purchase.dt.month
         features["purchase_weekday"] = purchase.dt.weekday
-        features["zone_delay_rate"] = self._lookup(
-            base, self.zone_rates, ["dest_city", "dest_state", "destination_zone"], self.global_rate)
-        features["origin_delay_rate"] = self._lookup(
-            base, self.origin_rates, ["origin_city", "origin_state"], self.global_rate)
+        features["zone_delay_rate"] = self._lookup(base, self.zone_rates, ZONE_KEYS, self.global_rate)
+        features["origin_delay_rate"] = self._lookup(base, self.origin_rates, ORIGIN_KEYS, self.global_rate)
+        features["zone_days"] = self._lookup(base, self.zone_days, ZONE_KEYS, self.global_days)
+        features["origin_days"] = self._lookup(base, self.origin_days, ORIGIN_KEYS, self.global_days)
 
         # UF como colunas 0/1 (uma por estado), sempre na mesma ordem
         for side, col in (("origin", "origin_state"), ("dest", "dest_state")):
@@ -121,7 +149,7 @@ class FeatureBuilder:
     def feature_columns(self) -> list[str]:
         base = ["distance_km", "same_city", "same_state", "promised_days", "weight_g",
                 "volume_cm3", "n_items", "purchase_month", "purchase_weekday",
-                "zone_delay_rate", "origin_delay_rate"]
+                "zone_delay_rate", "origin_delay_rate", "zone_days", "origin_days"]
         return base + [f"{s}_uf_{uf}" for s in ("origin", "dest") for uf in STATES]
 
     def resolve_zip(self, zip_prefix: int) -> tuple[int, bool]:
@@ -153,7 +181,9 @@ class FeatureBuilder:
                                                 "destination_zip": [used_zip]}))
         zone = int(self._assign_zones(row).iloc[0])
         key = (row["dest_city"].iloc[0], row["dest_state"].iloc[0], zone)
+        bounds = self.zone_bounds.get((key[0], key[1]))
         return {
+            "n_zones": 1 if bounds is None else len(bounds) + 1,
             "zip_used": used_zip,
             "exact_match": exact,
             "city_key": key[0],
@@ -182,19 +212,21 @@ class FeatureBuilder:
         return base
 
     def _fit_zones(self, base: pd.DataFrame) -> None:
-        """Forma B: por cidade, ordena os prefixos e corta em até 4 faixas com
-        quantidades de pedidos parecidas. Guarda o maior prefixo de cada faixa."""
+        """Por cidade, ordena os prefixos e corta em faixas com quantidades de pedidos
+        parecidas. O nº de faixas depende do tamanho da cidade (zones_for_city).
+        Guarda o maior prefixo de cada faixa."""
         counts = base.groupby(["dest_city", "dest_state", "destination_zip"]).size().rename("orders")
         self.zone_bounds = {}
         for (city, state), group in counts.groupby(level=[0, 1]):
             group = group.droplevel([0, 1]).sort_index()
             before = group.cumsum() - group
-            zone = (before / group.sum() * N_ZONES).astype(int)
+            n_zones = zones_for_city(int(group.sum()), len(group))
+            zone = (before / group.sum() * n_zones).astype(int)
             upper = group.groupby(zone.to_numpy()).apply(lambda s: s.index.max())
             self.zone_bounds[(city, state)] = upper.to_numpy()[:-1]  # o último limite é aberto
 
     def _assign_zones(self, base: pd.DataFrame) -> pd.Series:
-        """Zona 1..4 de cada destino. CEPs fora dos limites conhecidos caem na faixa mais próxima;
+        """Zona 1..N de cada destino (N varia por cidade). CEPs fora dos limites conhecidos caem na faixa mais próxima;
         cidades sem pedidos no treino ficam com zona 1."""
         zones = np.ones(len(base), dtype=int)
         keys = list(zip(base["dest_city"], base["dest_state"]))

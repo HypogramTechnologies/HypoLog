@@ -8,8 +8,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from app.core.config import settings
-from app.core.exceptions import NotFoundError, InvalidInputError, ModelUnavailableError
-from app.routers import cities, deliveries, routes, predictions, reports
+from app.core.exceptions import InvalidInputError, ModelUnavailableError, NotFoundError
+from app.routers import cities, deliveries, predictions, reports, routes, simulations
+from app.services.ml_risk_predictor import MLRiskPredictor
+from app.services.risk_baseline import HistoricalBaseline
+from app.services.zip_locator import ZipLocator
 
 
 logger = logging.getLogger("uvicorn.error")
@@ -24,12 +27,22 @@ def load_model():
     return artifact
 
 
+def build_risk_predictor(deliveries: pd.DataFrame, artifact: dict | None):
+    """Simulador de risco: usa o modelo de ML se ele foi treinado; senão, o baseline histórico."""
+    baseline = HistoricalBaseline(deliveries)
+    return MLRiskPredictor(artifact, baseline) if artifact else baseline
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Executa UMA vez, quando a API sobe
     app.state.deliveries = pd.read_parquet(settings.deliveries_file)
     app.state.cities = pd.read_parquet(settings.cities_file)
     app.state.delay_model = load_model()
+
+    # Simulador de risco (/simulations): reaproveita o mesmo modelo carregado acima
+    app.state.zip_locator = ZipLocator(app.state.deliveries, app.state.cities)
+    app.state.risk_predictor = build_risk_predictor(app.state.deliveries, app.state.delay_model)
     yield
 
 
@@ -82,3 +95,4 @@ app.include_router(deliveries.router, prefix=settings.api_prefix)
 app.include_router(routes.router, prefix=settings.api_prefix)
 app.include_router(reports.router, prefix=settings.api_prefix)
 app.include_router(predictions.router, prefix=settings.api_prefix)
+app.include_router(simulations.router, prefix=settings.api_prefix)
