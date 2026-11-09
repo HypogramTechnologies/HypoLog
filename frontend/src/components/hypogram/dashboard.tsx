@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "@tanstack/react-router";
 import {
   Area,
@@ -9,26 +9,29 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import {
-  ArrowRight,
-  CalendarDays,
-  Clock3,
-  Package,
-  ShieldCheck,
-  TriangleAlert,
-  TrendingUp,
-} from "lucide-react";
+import { ArrowRight, CalendarDays, Clock3, Package, ShieldCheck, TriangleAlert, TrendingUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ptBR } from "date-fns/locale";
 import type { DateRange } from "react-day-picker";
-import { cities, number, orders, trends, type Order } from "@/lib/hypogram-data";
-import { AppShell, ExportButton, Kpi, OrderDetail, PageHeading, PanelHeading } from "./shared";
-import { BrazilMap, MapLegend } from "./brazil-map";
+import { number, trends } from "@/lib/hypogram-data";
+import { getErrorMessage, getOverview, isCancel } from "@/services/hypolog";
+import type { DeliverySummary, HeatmapPoint } from "@/types/api";
+import { AppShell, ExportButton, Kpi, PageHeading, PanelHeading } from "./shared";
 
-const MIN_DATA_DATE = "2016-09-15";
-const MAX_DATA_DATE = "2018-08-29";
+// ---------- Configuração ----------
+
+const MIN_DATA_DATE = "2016-09-04";
+const MAX_DATA_DATE = "2018-10-17";
+
+const RANKING_MIN_ORDERS = 50; // cidades com menos pedidos não entram no ranking
+const SUMMARY_ONLY = 1_000_000; // min_orders enorme: só queremos o "summary", sem pontos de mapa
+const RANKING_SIZE = 5;
+
+const MONTHS = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+
+// ---------- Datas ----------
 
 function toIso(date: Date) {
   const year = date.getFullYear();
@@ -43,6 +46,58 @@ function parseDate(iso: string) {
   return new Date(year, month - 1, day, 12);
 }
 
+const addDays = (d: Date, n: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate() + n, 12);
+
+/** Divide o intervalo em meses de calendário (o primeiro e o último podem ser parciais). */
+function monthSegments(start: Date, end: Date) {
+  const multiYear = start.getFullYear() !== end.getFullYear();
+  const segments: { label: string; start: string; end: string }[] = [];
+
+  let cursor = new Date(start.getFullYear(), start.getMonth(), 1, 12);
+
+  while (cursor <= end) {
+    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0, 12);
+    const segStart = cursor < start ? start : cursor;
+    const segEnd = monthEnd > end ? end : monthEnd;
+
+    segments.push({
+      label: multiYear
+        ? `${MONTHS[cursor.getMonth()]}/${String(cursor.getFullYear()).slice(2)}`
+        : MONTHS[cursor.getMonth()]!,
+      start: toIso(segStart),
+      end: toIso(segEnd),
+    });
+
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1, 12);
+  }
+
+  return segments;
+}
+
+// ---------- Formatação ----------
+
+const signed = (n: number) => (n < 0 ? "−" : "") + Math.abs(n).toFixed(1).replace(".", ",");
+const pct = (n: number) => `${n.toFixed(1).replace(".", ",")}%`;
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/** Variação em relação ao período anterior (retorna "—" quando não há base de comparação). */
+function deltas(cur: DeliverySummary | null, prev: DeliverySummary | null) {
+  const none = { orders: "—", onTime: "—", delay: "—", days: "—" };
+  if (!cur || !prev || prev.total_orders === 0) return none;
+
+  return {
+    orders: `${signed(((cur.total_orders - prev.total_orders) / prev.total_orders) * 100)}%`,
+    onTime: `${signed(prev.delay_rate - cur.delay_rate)} p.p.`,
+    delay: `${signed(cur.delay_rate - prev.delay_rate)} p.p.`,
+    days:
+      cur.avg_delivery_days == null || prev.avg_delivery_days == null
+        ? "—"
+        : `${signed(cur.avg_delivery_days - prev.avg_delivery_days)} dias`,
+  };
+}
+
+// ---------- Filtro de período ----------
+
 function PeriodFilter({
   value,
   onChange,
@@ -51,47 +106,9 @@ function PeriodFilter({
   onChange: (range: DateRange) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [startText, setStartText] = useState(value.from ? toIso(value.from) : "");
-  const [endText, setEndText] = useState(value.to ? toIso(value.to) : "");
 
   const minDate = parseDate(MIN_DATA_DATE);
   const maxDate = parseDate(MAX_DATA_DATE);
-
-  const updateDate = (field: "from" | "to", iso: string) => {
-    if (!iso) return;
-
-    const date = parseDate(iso);
-
-    if (field === "from") {
-      onChange({
-        from: date,
-        to: value.to && date <= value.to ? value.to : undefined,
-      });
-      setStartText(iso);
-    } else {
-      onChange({
-        from: value.from,
-        to: date,
-      });
-      setEndText(iso);
-    }
-  };
-
-  const handleTextChange = (field: "from" | "to", text: string) => {
-    if (field === "from") {
-      setStartText(text);
-    } else {
-      setEndText(text);
-    }
-
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
-      const date = parseDate(text);
-
-      if (date >= minDate && date <= maxDate && toIso(date) === text) {
-        updateDate(field, text);
-      }
-    }
-  };
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -127,19 +144,16 @@ function PeriodFilter({
                 return;
               }
 
-              const from = range.from;
-              const to = range.to;
+              const { from, to } = range;
 
               if (from && (from < minDate || from > maxDate)) return;
               if (to && (to < minDate || to > maxDate)) return;
 
               onChange(range);
 
-              if (from && to) {
-                setOpen(false);
-              }
+              if (from && to) setOpen(false);
             }}
-            defaultMonth={value.from ?? parseDate("2018-03-01")}
+            defaultMonth={value.from ?? parseDate(MIN_DATA_DATE)}
             disabled={(date) => date < minDate || date > maxDate}
             fixedWeeks
             className="map-calendar w-full p-3 pointer-events-auto"
@@ -154,8 +168,19 @@ function PeriodFilter({
   );
 }
 
-export function DeliveryChart({ period = "6" }: { period?: string }) {
-  const data = period === "3" ? trends.slice(-3) : trends;
+// ---------- Gráfico ----------
+
+type ChartPoint = { month: string; onTime: number | null; delay: number | null };
+
+export function DeliveryChart({
+  period = "6",
+  data: dataProp,
+}: {
+  period?: string;
+  data?: ChartPoint[];
+}) {
+  // Sem `data`, mantém o comportamento antigo (dados de exemplo)
+  const data = dataProp ?? (period === "3" ? trends.slice(-3) : trends);
 
   return (
     <>
@@ -237,20 +262,118 @@ export function DeliveryChart({ period = "6" }: { period?: string }) {
   );
 }
 
+// ---------- Página ----------
+
 export function Dashboard() {
-  const [period, setPeriod] = useState("6");
-
   const [dateRange, setDateRange] = useState<DateRange>({
-    from: parseDate("2018-03-01"),
-    to: parseDate("2018-08-31"),
-  });
+    from: parseDate(MIN_DATA_DATE),
+    to: parseDate(MAX_DATA_DATE),
+  }); // por padrão, todo o período disponível
 
-  const [uf, setUf] = useState("all");
-  const [detail, setDetail] = useState<Order | null>(null);
+  const [current, setCurrent] = useState<DeliverySummary | null>(null);
+  const [previous, setPrevious] = useState<DeliverySummary | null>(null);
+  const [series, setSeries] = useState<ChartPoint[]>([]);
+  const [topCities, setTopCities] = useState<HeatmapPoint[]>([]);
+  const [chartPeriod, setChartPeriod] = useState<"6" | "3">("6"); // últimos N meses do gráfico
+  const [loading, setLoading] = useState(false);
+  const [chartLoading, setChartLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const critical = orders.filter((o) => o.risk >= 70 && (uf === "all" || o.uf === uf)).slice(0, 4);
+  useEffect(() => {
+    const { from, to } = dateRange;
+    if (!from || !to) return; // só busca com período completo
 
-  const filtered = uf !== "all";
+    const controller = new AbortController();
+    const { signal } = controller;
+    setLoading(true);
+    setError(null);
+
+    // Período anterior com o mesmo tamanho, logo antes do atual (para o "vs. período anterior")
+    const days = Math.round((to.getTime() - from.getTime()) / 86_400_000) + 1;
+    const prevTo = addDays(from, -1);
+    const prevFrom = addDays(prevTo, -(days - 1));
+
+    Promise.all([
+      // período atual: totalizadores + ranking de cidades (pontos do mapa)
+      getOverview(
+        { start_date: toIso(from), end_date: toIso(to), min_orders: RANKING_MIN_ORDERS },
+        signal,
+      ),
+      // período anterior: só o resumo
+      getOverview(
+        { start_date: toIso(prevFrom), end_date: toIso(prevTo), min_orders: SUMMARY_ONLY },
+        signal,
+      ),
+    ])
+      .then(([cur, prev]) => {
+        setCurrent(cur.summary);
+        setPrevious(prev.summary);
+
+        setTopCities(
+          cur.heatmap.points
+            .filter((p) => p.city_id != null)
+            .sort((a, b) => b.delay_rate - a.delay_rate)
+            .slice(0, RANKING_SIZE),
+        );
+      })
+      .catch((err) => {
+        if (!isCancel(err)) setError(getErrorMessage(err));
+      })
+      .finally(() => {
+        if (!signal.aborted) setLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [dateRange.from?.getTime(), dateRange.to?.getTime()]);
+
+  // Gráfico: últimos N meses (de calendário) até a data final
+  useEffect(() => {
+    const { from, to } = dateRange;
+    if (!from || !to) return;
+
+    const controller = new AbortController();
+    const { signal } = controller;
+    setChartLoading(true);
+
+    // N meses de calendário terminando no mês da data final (o último pode ser parcial).
+    // Ex.: final 17/10 e N=3 → Ago, Set e Out (01/10 a 17/10). Nunca começa antes do início do período.
+    const firstMonth = new Date(to.getFullYear(), to.getMonth() - (Number(chartPeriod) - 1), 1, 12);
+    const chartFrom = firstMonth > from ? firstMonth : from;
+
+    // uma chamada por mês (se o backend ganhar um endpoint de série, troque aqui)
+    Promise.all(
+      monthSegments(chartFrom, to).map((seg) =>
+        getOverview({ start_date: seg.start, end_date: seg.end, min_orders: SUMMARY_ONLY }, signal).then(
+          (ov) => ({ label: seg.label, summary: ov.summary }),
+        ),
+      ),
+    )
+      .then((months) =>
+        setSeries(
+          months.map(({ label, summary }) =>
+            summary.total_orders > 0
+              ? {
+                  month: label,
+                  onTime: round1(100 - summary.delay_rate),
+                  delay: round1(summary.delay_rate),
+                }
+              : { month: label, onTime: null, delay: null },
+          ),
+        ),
+      )
+      .catch((err) => {
+        if (!isCancel(err)) setError(getErrorMessage(err));
+      })
+      .finally(() => {
+        if (!signal.aborted) setChartLoading(false);
+      });
+
+    return () => controller.abort();
+  }, [dateRange.from?.getTime(), dateRange.to?.getTime(), chartPeriod]);
+
+  const emptyMonths = series.filter((p) => p.onTime == null).map((p) => p.month);
+
+  const delta = deltas(current, previous);
 
   return (
     <AppShell>
@@ -270,61 +393,49 @@ export function Dashboard() {
       <div className="filter-bar">
         <div className="filters">
           <PeriodFilter value={dateRange} onChange={setDateRange} />
-
-          <select
-            className="select-control"
-            aria-label="Filtrar estado"
-            value={uf}
-            onChange={(e) => setUf(e.target.value)}
-          >
-            <option value="all">Todos os estados</option>
-            {["SP", "RJ", "BA", "AM", "PA", "CE", "PE"].map((v) => (
-              <option key={v}>{v}</option>
-            ))}
-          </select>
+          {(loading || chartLoading) && <span className="text-[10px] text-muted-foreground">Atualizando...</span>}
         </div>
-
-        {/* <span className="text-[10px] text-muted-foreground flex items-center gap-1.5">
-          <span className="live-dot" />
-          Atualizado em 31 ago 2018
-        </span> */}
       </div>
+
+      {error && (
+        <div role="alert" className="insight mb-5">
+          {error}
+        </div>
+      )}
 
       <div className="kpi-grid">
         <Kpi
           label="Total de pedidos"
-          value={
-            filtered
-              ? number(orders.filter((o) => uf === "all" || o.uf === uf).length)
-              : period === "3"
-                ? "48.732"
-                : "99.441"
-          }
-          trend="12,8%"
+          value={current ? number(current.total_orders) : "—"}
+          trend={delta.orders}
           note="vs. período anterior"
           icon={Package}
         />
 
         <Kpi
           label="Entregas no prazo"
-          value={uf === "AM" ? "74,2%" : "92,4%"}
-          trend="2,3%"
+          value={current ? pct(100 - current.delay_rate) : "—"}
+          trend={delta.onTime}
           note="vs. período anterior"
           icon={ShieldCheck}
         />
 
         <Kpi
           label="Taxa de atraso"
-          value={uf === "AM" ? "25,8%" : "7,6%"}
-          trend="−1,8%"
+          value={current ? pct(current.delay_rate) : "—"}
+          trend={delta.delay}
           note="vs. período anterior"
           icon={TriangleAlert}
         />
 
         <Kpi
           label="Tempo médio de entrega"
-          value={uf === "AM" ? "22,4 dias" : "12,3 dias"}
-          trend="−1,2 dias"
+          value={
+            current?.avg_delivery_days != null
+              ? `${current.avg_delivery_days.toFixed(1).replace(".", ",")} dias`
+              : "—"
+          }
+          trend={delta.days}
           note="vs. período anterior"
           icon={Clock3}
         />
@@ -339,101 +450,22 @@ export function Dashboard() {
             <select
               className="select-control"
               aria-label="Intervalo do gráfico"
-              value={period}
-              onChange={(e) => setPeriod(e.target.value)}
+              value={chartPeriod}
+              onChange={(e) => setChartPeriod(e.target.value as "6" | "3")}
             >
               <option value="6">Últimos 6 meses</option>
               <option value="3">Últimos 3 meses</option>
             </select>
           </PanelHeading>
 
-          <DeliveryChart period={period} />
-        </section>
+          <DeliveryChart data={series} />
 
-        <section className="panel">
-          <PanelHeading
-            title="Mapa de risco logístico"
-            subtitle="Regiões com maior probabilidade de atraso"
-          >
-            <Link to="/mapa" className="text-[10px] text-primary flex items-center gap-1">
-              Ver mapa
-              <ArrowRight size={12} />
-            </Link>
-          </PanelHeading>
-
-          <BrazilMap onSelect={(c) => setUf(c.uf)} />
-          <MapLegend />
+          {emptyMonths.length > 0 && (
+            <p className="px-[22px] pb-4 text-[10px] text-muted-foreground">
+              Sem entregas registradas no período em: {emptyMonths.join(", ")}.
+            </p>
+          )}
         </section>
-      </div>
-
-      <div className="two-col">
-        {/*
-        <section className="panel">
-          <PanelHeading
-            title="Pedidos que precisam de atenção"
-            subtitle="Envios com alto risco de atraso"
-          >
-            <span className="risk-pill high">
-              {filtered ? critical.length : "148"} pedidos
-            </span>
-          </PanelHeading>
-          <div className="table-scroll">
-            <table>
-              <thead>
-                <tr>
-                  <th>Pedido</th>
-                  <th>Destino</th>
-                  <th>Risco de atraso</th>
-                  <th />
-                </tr>
-              </thead>
-              <tbody>
-                {critical.map((o) => (
-                  <tr key={o.id}>
-                    <td className="font-medium">#{o.id.slice(3)}</td>
-                    <td>
-                      {o.city}
-                      <div className="mt-1 text-[9px] text-muted-foreground">
-                        {o.uf}
-                      </div>
-                    </td>
-                    <td>
-                      <span className="text-danger font-semibold">
-                        {o.risk}%
-                      </span>
-                      <div className="mt-1 text-[9px] text-muted-foreground">
-                        Alto risco
-                      </div>
-                    </td>
-                    <td>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        aria-label={`Ver pedido ${o.id}`}
-                        onClick={() => setDetail(o)}
-                      >
-                        <ArrowRight size={14} />
-                      </Button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!critical.length && (
-              <div className="empty-state">
-                Nenhum pedido crítico para os filtros selecionados.
-              </div>
-            )}
-          </div>
-          <div className="table-foot">
-            <span>Monitoramento preventivo de entregas</span>
-            <Link to="/pedidos" className="text-primary flex items-center gap-1">
-              Ver todos os pedidos
-              <ArrowRight size={12} />
-            </Link>
-          </div>
-        </section>
-        */}
 
         <section className="panel">
           <PanelHeading
@@ -447,51 +479,42 @@ export function Dashboard() {
           </PanelHeading>
 
           <div className="px-[22px] pb-3">
-            {[...cities]
-              .sort((a, b) => b.risk - a.risk)
-              .slice(0, 4)
-              .map((c, i) => (
-                <div
-                  className="flex items-center gap-3 border-b border-border py-3.5 last:border-0"
-                  key={c.name}
-                >
-                  <span className="text-[10px] text-muted-foreground w-3">0{i + 1}</span>
+            {topCities.map((c, i) => (
+              <div
+                className="flex items-center gap-3 border-b border-border py-3.5 last:border-0"
+                key={c.city_id}
+              >
+                <span className="text-[10px] text-muted-foreground w-3">0{i + 1}</span>
 
-                  <div className="w-[95px] text-[11px] font-medium">{c.name}</div>
-
-                  <div className="progress-track flex-1">
-                    <div className="progress-fill" style={{ width: `${c.risk}%` }} />
-                  </div>
-
-                  <span className="text-[11px] font-semibold w-10 text-right">{c.risk}%</span>
+                <div className="w-[95px] truncate text-[11px] font-medium" title={c.label}>
+                  {c.label}
                 </div>
-              ))}
+
+                <div className="progress-track flex-1">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${Math.min(100, c.delay_rate)}%` }}
+                  />
+                </div>
+
+                <span className="text-[11px] font-semibold w-12 text-right">
+                  {pct(c.delay_rate)}
+                </span>
+              </div>
+            ))}
+
+            {!loading && topCities.length === 0 && (
+              <p className="py-4 text-sm text-muted-foreground">
+                Nenhuma cidade com pedidos suficientes neste período.
+              </p>
+            )}
           </div>
 
           <div className="px-[22px] pb-4 text-[9px] text-muted-foreground">
-            Probabilidade histórica de atraso nas entregas para cada cidade
+            Taxa de atraso por cidade no período (cidades com pelo menos {RANKING_MIN_ORDERS} pedidos)
           </div>
         </section>
       </div>
-
-      <div className="insight flex items-start gap-3">
-        <TriangleAlert size={18} className="text-warning shrink-0 mt-0.5" />
-
-        <div>
-          <span className="font-semibold">Atenção às rotas do Norte e Nordeste.</span> Manaus e
-          Salvador concentram os maiores índices de atraso. Antecipe ações com o simulador de risco.
-        </div>
-
-        <Link
-          to="/simulador"
-          className="ml-auto shrink-0 text-primary font-medium text-[10px] flex items-center gap-1"
-        >
-          Analisar risco
-          <ArrowRight size={13} />
-        </Link>
-      </div>
-
-      <OrderDetail order={detail} onClose={() => setDetail(null)} />
     </AppShell>
   );
 }

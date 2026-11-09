@@ -3,16 +3,6 @@ import { CircleMarker, MapContainer, Polyline, TileLayer, Tooltip, useMap } from
 import "leaflet/dist/leaflet.css";
 import { riskLevel } from "@/utils/risk";
 
-/**
- * Mapa de rotas com Leaflet: mostra a cidade de destino e, ligadas a ela por
- * linhas tracejadas, as cidades de origem das entregas.
- * - tamanho da bolinha = volume de pedidos da rota
- * - cor = chance de atraso da rota
- *
- * Importante: o Leaflet usa `window`, então este arquivo só pode ser carregado
- * no navegador (a MapPage importa com import() dinâmico).
- */
-
 export type MapPoint = {
   id: number;
   label: string;
@@ -65,7 +55,6 @@ function LockToBrazil() {
   return null;
 }
 
-/** Reenquadra o mapa quando muda o destino ou as origens (sem brigar com o arrasto do usuário). */
 function FitBounds({ points }: { points: [number, number][] }) {
   const map = useMap();
   const key = points.map((p) => p.join(",")).join(";");
@@ -110,7 +99,7 @@ export function RiskHeatmap({
   const destColor = destination ? COLORS[riskLevel(destination.delay_rate)] : COLORS.low;
 
   return (
-    <div className="relative h-[520px] w-full select-none overflow-hidden">
+    <div className="relative isolate z-0 h-[520px] w-full select-none overflow-hidden">
       <MapContainer
         center={BRAZIL_CENTER}
         zoom={4}
@@ -198,9 +187,13 @@ export function RiskHeatmap({
       )}
 
       {!loading && destination && list.length === 0 && (
-        <span className="absolute inset-x-0 top-1/2 z-[1000] text-center text-xs text-muted-foreground">
-          Nenhuma rota encontrada para este período e filtro.
-        </span>
+        <div className="pointer-events-none absolute inset-0 z-[1000] flex items-center justify-center p-4">
+          <div className="max-w-sm rounded-xl border border-border bg-white px-6 py-4 text-center shadow-lg">
+            <p className="text-base font-semibold text-black">
+              Nenhuma rota com atraso encontrada para este período e filtro.
+            </p>
+          </div>
+        </div>
       )}
 
       <div className="absolute bottom-6 left-3 z-[1000] flex items-center gap-3 rounded bg-white/90 px-2 py-1 text-[10px] text-muted-foreground shadow-sm">
