@@ -1,0 +1,54 @@
+services:
+  backend:
+    build: ./backend
+    container_name: hypolog-backend
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env.example
+      - path: ./backend/.env
+        required: false
+    volumes:
+      - ./backend/data:/app/data
+    command: >
+      sh -c "[ -f .env ] || cp .env.example .env;
+             if [ ! -f data/processed/deliveries.parquet ]; then
+               python scripts/download_data.py && python -m scripts.build_dataset;
+             fi &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    networks:
+      - hypolog-net
+
+  frontend:
+    build: ./frontend
+    container_name: hypolog-frontend
+    restart: unless-stopped
+    networks:
+      - hypolog-net
+
+  nginx:
+    image: nginx:alpine
+    container_name: hypolog-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./frontend/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - hypolog-net
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: hypolog-tunnel
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --url http://nginx:80
+    depends_on:
+      - nginx
+    networks:
+      - hypolog-net
+
+networks:
+  hypolog-net:
+    driver: bridge
