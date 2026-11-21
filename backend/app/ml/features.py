@@ -5,6 +5,11 @@ para garantir que o modelo receba os dados sempre no mesmo formato.
 
 Entrada: um DataFrame com uma linha por envio e as colunas de INPUT_COLUMNS.
 Saída:   um DataFrame numérico com as colunas de `feature_columns`.
+
+Ideia central: um envio atrasa quando o PRAZO PROMETIDO é apertado para aquele TRAJETO.
+Por isso, além dos dados do pacote, o modelo recebe "históricos": quanto costuma demorar
+e quanto costuma atrasar cada zona, cidade, rota e região de CEP, e a FOLGA do prazo
+(prazo prometido - tempo típico de entrega).
 """
 
 import numpy as np
@@ -24,9 +29,36 @@ INPUT_COLUMNS = [
     "n_items",          # quantidade de itens
 ]
 
-N_ZONES = 4
-SMOOTHING = 20  # quantos pedidos "fictícios" com a taxa global somamos a cada grupo
+N_ZONES = 4        # zonas de CEP por cidade de destino (forma B)
+SMOOTHING = 20     # quantos pedidos "fictícios" com a média global somamos a cada grupo
+MAX_DAYS = 60      # entregas muito longas (outliers) são limitadas a 60 dias nas médias
 STATES = sorted(BRAZIL_STATES)
+
+# Chaves de cada agrupamento
+ZONE = ["dest_city", "dest_state", "destination_zone"]           # zona de CEP do destino
+ORIGIN = ["origin_city", "origin_state"]                         # cidade de origem
+ROUTE = ["origin_state", "dest_state"]                           # rota UF -> UF
+CITY_ROUTE = ["origin_city", "origin_state", "dest_city", "dest_state"]  # rota cidade -> cidade
+DEST_CEP3 = ["dest_cep3"]                                        # 3 primeiros dígitos do CEP de destino
+ORIGIN_CEP3 = ["origin_cep3"]                                    # 3 primeiros dígitos do CEP de origem
+
+# Históricos aprendidos no treino: nome da feature -> (agrupamento, alvo)
+#   "late" = taxa de atraso do grupo   |   "days" = média de dias até a entrega do grupo
+HISTORIES = {
+    "zone_delay_rate": (ZONE, "late"),
+    "origin_delay_rate": (ORIGIN, "late"),
+    "route_delay_rate": (ROUTE, "late"),
+    "city_route_delay_rate": (CITY_ROUTE, "late"),
+    "origin_cep3_delay_rate": (ORIGIN_CEP3, "late"),
+    "zone_days": (ZONE, "days"),
+    "origin_days": (ORIGIN, "days"),
+    "route_days": (ROUTE, "days"),
+    "city_route_days": (CITY_ROUTE, "days"),
+    "dest_cep3_days": (DEST_CEP3, "days"),
+}
+
+# Folga do prazo: prazo prometido - tempo típico (negativa = prazo apertado)
+SLACKS = {"slack_zone": "zone_days", "slack_route": "route_days", "slack_city_route": "city_route_days"}
 
 
 def haversine_km(lat1, lng1, lat2, lng2) -> np.ndarray:
@@ -37,60 +69,57 @@ def haversine_km(lat1, lng1, lat2, lng2) -> np.ndarray:
 
 
 class FeatureBuilder:
-    """Aprende, com os dados de treino, as zonas de CEP e os históricos de atraso,
-    e transforma envios em features numéricas para o Random Forest."""
+    """Aprende, com os dados de treino, as zonas de CEP e os históricos de atraso e de
+    tempo de entrega, e transforma envios em features numéricas para o Random Forest.
+
+    No treino (`fit`/`fit_transform`), o DataFrame precisa ter também a coluna
+    `delivery_days` (dias reais até a entrega). Na previsão (`transform`) ela não é usada.
+    """
 
     def __init__(self, zip_table: pd.DataFrame):
         """zip_table: índice = prefixo de CEP; colunas lat, lng, city_key, state.
         É informação geográfica fixa (não tem nada sobre atrasos)."""
         self.zip_table = zip_table
         self.zone_bounds: dict[tuple[str, str], np.ndarray] = {}
-        self.zone_rates: pd.Series | None = None
-        self.origin_rates: pd.Series | None = None
-        self.global_rate: float | None = None
+        self.histories: dict[str, pd.Series] = {}
+        self.global_values: dict[str, float] = {}
 
     # ================================================================ aprender
     def fit(self, df: pd.DataFrame, y: pd.Series) -> "FeatureBuilder":
-        base = self._add_geography(df)
-        self._fit_zones(base)
-        base["destination_zone"] = self._assign_zones(base)
-        self.global_rate = float(y.mean())
-        self.zone_rates = self._smoothed_rates(base, y, ["dest_city", "dest_state", "destination_zone"])
-        self.origin_rates = self._smoothed_rates(base, y, ["origin_city", "origin_state"])
+        base = self._prepare(df, fit_zones=True)
+        targets = self._targets(df, y)
+        self.global_values = {name: float(t.mean()) for name, t in targets.items()}
+        self.histories = {
+            feature: self._smoothed_mean(base, targets[target], keys, self.global_values[target])
+            for feature, (keys, target) in HISTORIES.items()
+        }
         return self
 
     def fit_transform(self, df: pd.DataFrame, y: pd.Series, n_splits: int = 5) -> pd.DataFrame:
         """Usado SÓ no treino. Os históricos de cada linha são calculados sem ela mesma
-        (validação cruzada), senão o modelo "vê" a resposta dentro da própria feature."""
+        (validação cruzada em 5 partes), senão o modelo "vê" a resposta dentro da própria feature."""
         self.fit(df, y)
         features = self.transform(df)
-
-        base = self._add_geography(df)
-        base["destination_zone"] = self._assign_zones(base)
-        zone_keys = ["dest_city", "dest_state", "destination_zone"]
-        origin_keys = ["origin_city", "origin_state"]
+        base = self._prepare(df)
+        targets = self._targets(df, y)
 
         for train_idx, fold_idx in KFold(n_splits, shuffle=True, random_state=42).split(base):
-            part, part_y = base.iloc[train_idx], y.iloc[train_idx]
-            fold = base.iloc[fold_idx]
-            global_rate = float(part_y.mean())
-            zone = self._smoothed_rates(part, part_y, zone_keys, global_rate)
-            origin = self._smoothed_rates(part, part_y, origin_keys, global_rate)
-            features.iloc[fold_idx, features.columns.get_loc("zone_delay_rate")] = (
-                self._lookup(fold, zone, zone_keys, global_rate)
-            )
-            features.iloc[fold_idx, features.columns.get_loc("origin_delay_rate")] = (
-                self._lookup(fold, origin, origin_keys, global_rate)
-            )
+            part, fold = base.iloc[train_idx], base.iloc[fold_idx]
+            for feature, (keys, target) in HISTORIES.items():
+                t = targets[target].iloc[train_idx]
+                table = self._smoothed_mean(part, t, keys, float(t.mean()))
+                features.iloc[fold_idx, features.columns.get_loc(feature)] = (
+                    self._lookup(fold, table, keys, float(t.mean()))
+                )
+        self._add_slacks(features)  # recalcula as folgas com os históricos fora-da-dobra
         return features
 
     # ============================================================== transformar
     def transform(self, df: pd.DataFrame) -> pd.DataFrame:
-        if self.global_rate is None:
+        if not self.histories:
             raise RuntimeError("FeatureBuilder ainda não foi treinado (chame fit)")
 
-        base = self._add_geography(df)
-        base["destination_zone"] = self._assign_zones(base)
+        base = self._prepare(df)
         purchase = pd.to_datetime(base["purchase_date"])
 
         features = pd.DataFrame(index=df.index)
@@ -103,26 +132,29 @@ class FeatureBuilder:
         features["weight_g"] = base["weight_g"].astype(float)
         features["volume_cm3"] = base["volume_cm3"].astype(float)
         features["n_items"] = base["n_items"].astype(float)
+        features["weight_per_item"] = features["weight_g"] / features["n_items"].clip(lower=1)
         features["purchase_month"] = purchase.dt.month
+        features["purchase_week"] = purchase.dt.isocalendar().week.astype(int).to_numpy()
         features["purchase_weekday"] = purchase.dt.weekday
-        features["zone_delay_rate"] = self._lookup(
-            base, self.zone_rates, ["dest_city", "dest_state", "destination_zone"], self.global_rate)
-        features["origin_delay_rate"] = self._lookup(
-            base, self.origin_rates, ["origin_city", "origin_state"], self.global_rate)
 
-        # UF como colunas 0/1 (uma por estado), sempre na mesma ordem
+        for feature, (keys, target) in HISTORIES.items():
+            features[feature] = self._lookup(base, self.histories[feature], keys, self.global_values[target])
+        self._add_slacks(features)
+
+        # UF como colunas 0/1 (one-hot), uma por estado, sempre na mesma ordem
         for side, col in (("origin", "origin_state"), ("dest", "dest_state")):
             for uf in STATES:
                 features[f"{side}_uf_{uf}"] = (base[col] == uf).astype(int)
 
-        return features
+        return features[self.feature_columns]
 
     @property
     def feature_columns(self) -> list[str]:
         base = ["distance_km", "same_city", "same_state", "promised_days", "weight_g",
-                "volume_cm3", "n_items", "purchase_month", "purchase_weekday",
-                "zone_delay_rate", "origin_delay_rate"]
-        return base + [f"{s}_uf_{uf}" for s in ("origin", "dest") for uf in STATES]
+                "volume_cm3", "n_items", "weight_per_item", "purchase_month", "purchase_week",
+                "purchase_weekday"]
+        return (base + list(HISTORIES) + list(SLACKS)
+                + [f"{s}_uf_{uf}" for s in ("origin", "dest") for uf in STATES])
 
     def resolve_zip(self, zip_prefix: int) -> tuple[int, bool]:
         """Prefixo de CEP que será usado na previsão e se ele é exato.
@@ -159,10 +191,35 @@ class FeatureBuilder:
             "city_key": key[0],
             "state": key[1],
             "zone": zone,
-            "zone_delay_rate": float(self.zone_rates.get(key, self.global_rate)),
+            "zone_delay_rate": float(self.histories["zone_delay_rate"].get(key, self.global_values["late"])),
         }
 
     # ================================================================ internos
+    def _prepare(self, df: pd.DataFrame, fit_zones: bool = False) -> pd.DataFrame:
+        """Geografia + zona de CEP + regiões de CEP (3 dígitos) de cada envio."""
+        base = self._add_geography(df)
+        if fit_zones:
+            self._fit_zones(base)
+        base["destination_zone"] = self._assign_zones(base)
+        base["dest_cep3"] = base["destination_zip"].astype(int) // 100
+        base["origin_cep3"] = base["origin_zip"].astype(int) // 100
+        return base
+
+    @staticmethod
+    def _targets(df: pd.DataFrame, y: pd.Series) -> dict[str, pd.Series]:
+        """O que os históricos resumem: atrasou (0/1) e quantos dias levou a entrega."""
+        if "delivery_days" not in df:
+            raise ValueError("No treino, o DataFrame precisa da coluna delivery_days")
+        return {
+            "late": y.astype(float),
+            "days": df["delivery_days"].astype(float).clip(upper=MAX_DAYS),
+        }
+
+    @staticmethod
+    def _add_slacks(features: pd.DataFrame) -> None:
+        for slack, typical in SLACKS.items():
+            features[slack] = features["promised_days"] - features[typical]
+
     def _add_geography(self, df: pd.DataFrame) -> pd.DataFrame:
         """Junta coordenadas, cidade e UF da origem e do destino."""
         base = df.copy()
@@ -205,17 +262,18 @@ class FeatureBuilder:
                 zones[i] = int(np.searchsorted(bounds, zips[i], side="left")) + 1
         return pd.Series(zones, index=base.index)
 
-    def _smoothed_rates(self, base, y, keys, global_rate=None) -> pd.Series:
-        """Taxa de atraso por grupo, "puxada" para a taxa global quando o grupo é pequeno:
-        (atrasados + SMOOTHING * global) / (pedidos + SMOOTHING)."""
-        global_rate = self.global_rate if global_rate is None else global_rate
-        stats = base[keys].assign(y=y.to_numpy()).groupby(keys)["y"].agg(["sum", "count"])
-        return (stats["sum"] + SMOOTHING * global_rate) / (stats["count"] + SMOOTHING)
+    @staticmethod
+    def _smoothed_mean(base, target, keys, global_value) -> pd.Series:
+        """Média do alvo por grupo, "puxada" para a média global quando o grupo é pequeno:
+        (soma do grupo + SMOOTHING * global) / (pedidos do grupo + SMOOTHING).
+        Ex.: taxa de atraso de uma zona com 3 pedidos fica perto da taxa geral."""
+        stats = base[keys].assign(t=target.to_numpy()).groupby(keys)["t"].agg(["sum", "count"])
+        return (stats["sum"] + SMOOTHING * global_value) / (stats["count"] + SMOOTHING)
 
     @staticmethod
-    def _lookup(base, rates, keys, default) -> np.ndarray:
+    def _lookup(base, table, keys, default) -> np.ndarray:
         index = pd.MultiIndex.from_frame(base[keys]) if len(keys) > 1 else base[keys[0]]
-        return rates.reindex(index).fillna(default).to_numpy()
+        return table.reindex(index).fillna(default).to_numpy()
 
 
 def build_zip_table(geolocation: pd.DataFrame) -> pd.DataFrame:

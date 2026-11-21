@@ -158,13 +158,20 @@ A aplicação estará disponível em `http://localhost:5173`.
 ### 🤖 Modelo de Previsão
 
 Random Forest que estima a probabilidade de atraso de um envio a partir de distância, prazo
-prometido, peso, volume, calendário e do histórico de atrasos da zona de destino (cidade
-dividida em até 4 faixas de CEP) e da cidade de origem.
+prometido, peso, volume e calendário, e de históricos aprendidos no treino: taxa de atraso e
+tempo típico de entrega da zona de destino (cidade dividida em até 4 faixas de CEP), da cidade
+de origem, da rota (UF → UF e cidade → cidade) e da região do CEP, além da **folga do prazo**
+(prazo prometido − tempo típico de entrega).
+
+| Divisão | ROC-AUC | Precision | Recall | F1 |
+|---|---|---|---|---|
+| Aleatória estratificada 60/20/20 (principal; limite escolhido na validação) | 0,812 | 35,9% | 38,2% | 0,370 |
+| Temporal (treina até mar/2018, testa abr–ago/2018; robustez) | 0,733 | — | — | — |
 
 | Notebook | Conteúdo |
 |---|---|
 | `ml/notebooks/01_exploracao.ipynb` | Volume de pedidos, atrasos, envios elegíveis e divisão temporal |
-| `ml/notebooks/02_modelo.ipynb` | Métricas (ROC-AUC, Precision, Recall, F1), curvas, matriz de confusão e importância das features |
+| `ml/notebooks/02_modelo.ipynb` | Métricas (ROC-AUC, Precision, Recall, F1), curvas, matriz de confusão, importância das features e teste de robustez temporal |
 
 Para abrir os notebooks, instale o kernel no ambiente do backend e selecione o `backend/.venv`:
 
