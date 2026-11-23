@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   Box,
-  Check,
   Download,
   FlaskConical,
   MapPin,
@@ -12,7 +11,9 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { downloadCsv } from "@/lib/hypogram-data";
-import { AppShell, PageHeading, PanelHeading, RiskPill } from "../components/hypogram/shared";
+import { AppShell, PageHeading, PanelHeading } from "../components/hypogram/shared";
+import { getErrorMessage, isCancel, simulateShipment } from "@/services/hypolog";
+import type { RiskLevel, SimulationResult } from "@/types/api";
 import { toast } from "sonner";
 import { CalendarDays } from "lucide-react";
 import { Calendar } from "@/components/ui/calendar";
@@ -23,16 +24,34 @@ const initial = {
   origin: "01001-000",
   destination: "69005-010",
   weight: "2.5",
+  orderValue: "150",
   height: "20",
   width: "30",
   length: "40",
   days: "10",
 };
+// Nível de risco vem da API (os limites são os do modelo), não do valor do percentual
+const RISK_STYLE: Record<RiskLevel, { label: string; pill: string; dot: string; text: string }> = {
+  high: { label: "Alto risco", pill: "high", dot: "danger", text: "text-danger" },
+  moderate: { label: "Risco moderado", pill: "medium", dot: "warning", text: "text-warning" },
+  low: { label: "Baixo risco", pill: "low", dot: "success", text: "text-success" },
+};
+
+const INSIGHT: Record<RiskLevel, string> = {
+  high: "Considere ampliar o prazo de entrega ou revisar a rota de despacho para reduzir a exposição ao risco.",
+  moderate:
+    "Há um risco relevante de atraso. Avalie ampliar o prazo prometido e acompanhe o despacho de perto.",
+  low: "O envio apresenta condições favoráveis. Acompanhe o despacho e mantenha o cliente informado.",
+};
+
+const formatPercent = (value: number) =>
+  value.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
+
 export function SimulatorPage() {
   const [form, setForm] = useState(initial);
-  const [result, setResult] = useState<number | null>(null);
+  const [result, setResult] = useState<SimulationResult | null>(null);
   const [loading, setLoading] = useState(false);
-  const pendingSimulation = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingRequest = useRef<AbortController | null>(null);
   const toIso = (d: Date) =>
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
@@ -44,17 +63,13 @@ export function SimulatorPage() {
   const [open, setOpen] = useState(false);
   useEffect(
     () => () => {
-      if (pendingSimulation.current !== null) {
-        clearTimeout(pendingSimulation.current);
-      }
+      pendingRequest.current?.abort();
     },
     [],
   );
   const invalidateSimulation = () => {
-    if (pendingSimulation.current !== null) {
-      clearTimeout(pendingSimulation.current);
-      pendingSimulation.current = null;
-    }
+    pendingRequest.current?.abort();
+    pendingRequest.current = null;
     setLoading(false);
     setResult(null);
   };
@@ -62,7 +77,13 @@ export function SimulatorPage() {
     invalidateSimulation();
     setForm((s) => ({ ...s, [key]: value }));
   };
-  const field = (key: keyof typeof initial, label: string, type = "number") => (
+  const field = (
+    key: keyof typeof initial,
+    label: string,
+    type = "number",
+    step = "0.1",
+    min = "0.1",
+  ) => (
     <div className="field">
       <label htmlFor={key}>{label}</label>
       <input
@@ -70,34 +91,48 @@ export function SimulatorPage() {
         value={form[key]}
         type={type}
         required
-        min={type === "number" ? "0.1" : undefined}
-        step={type === "number" ? "0.1" : undefined}
-        max={type === "number" ? "100000" : undefined}
+        min={type === "number" ? min : undefined}
+        step={type === "number" ? step : undefined}
+        max={type === "number" ? "1000000" : undefined}
         pattern={type === "text" ? "[0-9]{5}-?[0-9]{3}" : undefined}
         onChange={(e) => set(key, e.target.value)}
       />
     </div>
   );
-  const submit = (e: FormEvent) => {
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     invalidateSimulation();
+    const controller = new AbortController();
+    pendingRequest.current = controller;
     setLoading(true);
-    pendingSimulation.current = setTimeout(() => {
-      const dest = Number(form.destination.replace(/\D/g, "").slice(0, 2));
-      const origin = Number(form.origin.replace(/\D/g, "").slice(0, 2));
-      const geographic = Math.abs(dest - origin) * 0.65;
-      const score = Math.round(
-        Math.min(
-          96,
-          Math.max(8, 20 + geographic + Number(form.weight) * 2 - Number(form.days) * 1.4),
-        ),
+    try {
+      const data = await simulateShipment(
+        {
+          origin_zip: form.origin,
+          destination_zip: form.destination,
+          weight_kg: Number(form.weight),
+          order_value: Number(form.orderValue),
+          height_cm: Number(form.height),
+          width_cm: Number(form.width),
+          length_cm: Number(form.length),
+          estimated_days: Number(form.days),
+          purchase_date: date,
+        },
+        controller.signal,
       );
-      setResult(score);
-      setLoading(false);
-      pendingSimulation.current = null;
+      setResult(data);
       toast.success("Simulação de risco de atraso concluída.");
-    }, 800);
+    } catch (err) {
+      if (isCancel(err)) return;
+      toast.error(getErrorMessage(err));
+    } finally {
+      if (pendingRequest.current === controller) {
+        pendingRequest.current = null;
+        setLoading(false);
+      }
+    }
   };
+  const risk = result ? RISK_STYLE[result.risk_level] : null;
   return (
     <AppShell>
       <PageHeading
@@ -135,6 +170,7 @@ export function SimulatorPage() {
               {field("height", "Altura (cm)")}
               {field("width", "Largura (cm)")}
               {field("length", "Comprimento (cm)")}
+              {field("orderValue", "Valor do pedido (R$)", "number", "0.01", "0")}
             </div>
           </section>
           <section className="form-section">
@@ -179,7 +215,7 @@ export function SimulatorPage() {
                 </Popover>
               </div>
 
-              {field("days", "Prazo estimado (dias)")}
+              {field("days", "Prazo estimado (dias)", "number", "1", "1")}
             </div>
           </section>
           <div className="p-[22px] flex gap-3">
@@ -209,7 +245,7 @@ export function SimulatorPage() {
               <h2 className="panel-title">Diagnóstico do envio</h2>
               <Sparkles size={18} className="text-primary" />
             </div>
-            {result === null ? (
+            {result === null || risk === null ? (
               <div className="empty-state py-20">
                 <span className="report-icon mx-auto">
                   <FlaskConical size={22} />
@@ -225,18 +261,22 @@ export function SimulatorPage() {
               </div>
             ) : (
               <>
-                <div
-                  className={`result-score ${result >= 70 ? "text-danger" : result >= 40 ? "text-warning" : "text-success"}`}
-                >
-                  {result}
+                <div className={`result-score ${risk.text}`}>
+                  {formatPercent(result.delay_probability)}
                   <span className="text-3xl">%</span>
                 </div>
                 <p className="text-xs text-muted-foreground mb-5">
-                  Probabilidade demonstrativa de atraso
+                  Probabilidade estimada de atraso
                 </p>
-                <RiskPill risk={result} />
+                <span className={`risk-pill ${risk.pill}`}>
+                  <span className={`legend-dot dot-${risk.dot}`} />
+                  {risk.label}
+                </span>
                 <div className="result-meter">
-                  <div className="result-meter-fill" style={{ width: `${result}%` }} />
+                  <div
+                    className="result-meter-fill"
+                    style={{ width: `${Math.min(100, result.delay_probability)}%` }}
+                  />
                 </div>
                 <div className="stat-row">
                   <span className="text-muted-foreground">Prazo informado</span>
@@ -246,25 +286,20 @@ export function SimulatorPage() {
                   <span className="text-muted-foreground">Peso do pacote</span>
                   <b>{form.weight} kg</b>
                 </div>
-                <h3 className="font-semibold text-xs mt-6 mb-3">
-                  Fatores que influenciam o resultado
-                </h3>
-                <p className="text-xs text-muted-foreground leading-7">
-                  • Proximidade entre faixas de CEP
-                  <br />• Peso do pacote e prazo disponível
-                  <br />• Histórico da cidade de destino
-                </p>
-                <div className="insight mt-5">
-                  {result >= 70
-                    ? "Considere ampliar o prazo de entrega ou revisar a rota de despacho para reduzir a exposição ao risco."
-                    : "O envio apresenta condições favoráveis. Acompanhe o despacho e mantenha o cliente informado."}
-                </div>
+                <div className="insight mt-5">{INSIGHT[result.risk_level]}</div>
                 <Button
                   className="w-full mt-5"
                   variant="outline"
                   onClick={() => {
                     downloadCsv(
-                      [{ ...form, probabilidade: result, tipo: "Estimativa demonstrativa" }],
+                      [
+                        {
+                          ...form,
+                          probabilidade: result.delay_probability,
+                          nivel_de_risco: risk.label,
+                          modelo: result.model.name,
+                        },
+                      ],
                       "hypogram-simulacao",
                     );
                     toast.success("Simulação exportada");

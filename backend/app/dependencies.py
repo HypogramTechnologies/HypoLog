@@ -10,6 +10,7 @@ from app.services.city_service import CityService
 from app.services.delivery_service import DeliveryService
 from app.services.prediction_service import PredictionService
 from app.services.route_service import RouteService
+from app.services.simulation_service import SimulationService
 
 
 # ---------- Repositories ----------
@@ -57,8 +58,14 @@ def get_prediction_service(
     return PredictionService(artifact, city_repository)
 
 
+def get_simulation_service(request: Request) -> SimulationService:
+    # Localizador de CEP e estimador de risco são construídos uma vez, no startup (main.py)
+    return SimulationService(request.app.state.zip_locator, request.app.state.risk_predictor)
+
+
 # ---------- Atalhos para os routers ----------
 DeliveryServiceDep = Annotated[DeliveryService, Depends(get_delivery_service)]
 CityServiceDep = Annotated[CityService, Depends(get_city_service)]
 RouteServiceDep = Annotated[RouteService, Depends(get_route_service)]
 PredictionServiceDep = Annotated[PredictionService, Depends(get_prediction_service)]
+SimulationServiceDep = Annotated[SimulationService, Depends(get_simulation_service)]
