@@ -71,15 +71,15 @@ export function AppShell({ children }: { children: ReactNode }) {
             </Link>
           ))}
         </nav>
-        <div className="nav-heading mt-7">TREINAMENTO</div>
-        <Link
+        {/* <div className="nav-heading mt-7">TREINAMENTO</div> */}
+        {/* <Link
           to="/modelo"
           className={`nav-item ${path === "/modelo" ? "active" : ""}`}
           onClick={() => setOpen(false)}
         >
           <Code2 size={17} />
           Modelo & API
-        </Link>
+        </Link> */}
         <div className="sidebar-bottom">
           <Button
             variant="ghost"
