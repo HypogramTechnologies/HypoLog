@@ -258,7 +258,7 @@ pip install ipykernel matplotlib
 | #23 | Subir a aplicação na nuvem | Adson | 8 | ✅ Concluída | [card](https://trello.com/c/NaIyu5f5) | RNF02 |
 | #30 | Documentação de Machine Learning no GitHub | Carlos | 3 | ✅ Concluída | [card](https://trello.com/c/gcp2V4Gk) | RNF03 |
 | #22 | Documentação da API com Swagger | Carlos | 2 | ✅ Concluída | [card](https://trello.com/c/P91ywp5n) | RNF01 |
-| #24 | Gravar vídeo e subir no YouTube | João Pedro | 1 | ⏳ A fazer | [card](https://trello.com/c/XlK5WEhp) | — |
+| #24 | Gravar vídeo e subir no YouTube | João Pedro | 1 | ✅ Concluída | [card](https://trello.com/c/XlK5WEhp) | — |
 
 #### 📉 Burndown
 
