@@ -2,6 +2,8 @@
 
 **HypoLog** é um sistema web de **inteligência logística** que combina **Ciência de Dados** e **Machine Learning** para mapear gargalos de entrega e prever o risco de atraso de pedidos no e-commerce brasileiro. A solução é composta por uma **API de predição** e uma **aplicação de gestão**, construídas a partir do *Brazilian E-commerce Public Dataset by Olist* — mais de 100 mil pedidos reais realizados entre 2016 e 2018.
 
+🌐 **Acesse a aplicação:** [hypolog.tailea3691.ts.net](https://hypolog.tailea3691.ts.net)
+
 O foco do projeto é permitir que **gestores e analistas de logística** deixem de reagir a atrasos depois que eles acontecem e passem a **atuar de forma preventiva**, identificando regiões críticas, avaliando parceiros logísticos e simulando o risco de novos envios em tempo real.
 
 ---
@@ -91,7 +93,17 @@ git clone https://github.com/HypogramTechnologies/HypoLog.git
 cd HypoLog
 ```
 
-### ⚙️ Backend (API)
+### 🐳 Com Docker (recomendado)
+
+```bash
+docker compose up -d --build
+```
+
+Sobe o backend, o frontend e o Nginx. Na primeira execução, o backend baixa a base da Olist e
+gera os arquivos processados. A aplicação fica disponível em `http://localhost`, e a API e o
+Swagger em `http://localhost/docs`.
+
+### ⚙️ Backend (API) sem Docker
 
 ```bash
 cd backend
@@ -134,7 +146,7 @@ A API estará disponível em `http://localhost:8000`.
 > (`metrics.json`) e as previsões do período de teste (`test_predictions.parquet`).
 > Sem o modelo, a API sobe normalmente, mas a rota `/predictions` responde 503.
 
-### 🖥️ Frontend
+### 🖥️ Frontend sem Docker
 
 ```bash
 cd frontend
@@ -165,8 +177,7 @@ de origem, da rota (UF → UF e cidade → cidade) e da região do CEP, além da
 
 | Divisão | ROC-AUC | Precision | Recall | F1 |
 |---|---|---|---|---|
-| Aleatória estratificada 60/20/20 (principal; limite escolhido na validação) | 0,812 | 35,9% | 38,2% | 0,370 |
-| Temporal (treina até mar/2018, testa abr–ago/2018; robustez) | 0,733 | — | — | — |
+| Aleatória estratificada 60/20/20 (limite escolhido na validação) | 0,812 | 35,9% | 38,2% | 0,370 |
 
 | Notebook | Conteúdo |
 |---|---|
@@ -178,8 +189,6 @@ Para abrir os notebooks, instale o kernel no ambiente do backend e selecione o `
 ```bash
 pip install ipykernel matplotlib
 ```
-
-> 🐳 A execução com Docker será adicionada nas próximas sprints.
 
 ---
 
@@ -199,9 +208,14 @@ pip install ipykernel matplotlib
 
 #### 📋 Tarefas
 
-| ID | Nome | Responsável(is) | Status | Link | Requisitos Atendidos |
-|---|---|---|---|---|---|
-| -- | | | | | |
+| ID | Nome | Responsável(is) | Pontos | Status | Link | Requisitos Atendidos |
+|---|---|---|---|---|---|---|
+| #5 | Análise de todos os CSVs disponíveis no Kaggle | Andressa | 5 | ✅ Concluída | [card](https://trello.com/c/WaUdw36w) | RF01 |
+| #4 | Levantamento dos atributos/variáveis usados no aprendizado | Andressa | 5 | ✅ Concluída | [card](https://trello.com/c/8VsarXTY) | RF02, RNF03 |
+| #29 | Análise de performance para leitura de dados: banco de dados x CSV | João Pedro | 3 | ✅ Concluída | [card](https://trello.com/c/30acQEmK) | RNF04 |
+| #28 | Organização do GitHub | Carlos | 2 | ✅ Concluída | [card](https://trello.com/c/FDAwhFFO) | — |
+| #27 | Apresentação da sprint (PowerPoint) | Andressa, João Pedro | 2 | ✅ Concluída | [card](https://trello.com/c/Rk1kBFSG) | — |
+| #26 | Gravar vídeo e subir no YouTube | João Pedro | 1 | ✅ Concluída | [card](https://trello.com/c/RWz7mdul) | — |
 
 #### 📉 Burndown
 
@@ -213,9 +227,20 @@ pip install ipykernel matplotlib
 
 #### 📋 Tarefas
 
-| ID | Nome | Responsável(is) | Status | Link | Requisitos Atendidos |
-|---|---|---|---|---|---|
-| -- | | | | | |
+| ID | Nome | Responsável(is) | Pontos | Status | Link | Requisitos Atendidos |
+|---|---|---|---|---|---|---|
+| #6 | Treinamento do modelo de Machine Learning | Carlos | 13 | ✅ Concluída | [card](https://trello.com/c/cRVzrzH0) | RF02, RNF03 |
+| #13 | Backend para popular a tela de Mapa de riscos | Carlos, João Pedro | 8 | ✅ Concluída | [card](https://trello.com/c/QBsxBx1Z) | RF01, RF03 |
+| #17 | Tela de Mapa de riscos | Adson | 8 | ✅ Concluída | [card](https://trello.com/c/IZnNT7xX) | RF03 |
+| #7 | Backend de Machine Learning para a tela de Modelo | Carlos, João Pedro | 5 | ✅ Concluída | [card](https://trello.com/c/jwi5oTwC) | RF02 |
+| #8 | Integrar o treinamento ao backend do sistema | Carlos | 5 | ✅ Concluída | [card](https://trello.com/c/5IloXn1P) | RF02 |
+| #9 | Backend para popular a tela de Dashboard | Adson | 5 | ✅ Concluída | [card](https://trello.com/c/BhAoRyoI) | RF05 |
+| #11 | Tela de Dashboard | Adson | 5 | ✅ Concluída | [card](https://trello.com/c/omXoXYih) | RF05 |
+| #20 | Relatórios básicos e funcionais (backend) | Andressa | 5 | ✅ Concluída | [card](https://trello.com/c/jnGsDHD2) | RF01, RF06 |
+| #21 | Relatórios (visualização e exportação) | Andressa | 5 | ✅ Concluída | [card](https://trello.com/c/7iwtkV3n) | RF06 |
+| #12 | Tela de Simulador de riscos | João Pedro | 5 | ✅ Concluída | [card](https://trello.com/c/Y7hDzWD9) | RF04 |
+| #10 | Ajustar o mapa para selecionar as regiões corretamente | Adson | 3 | ✅ Concluída | [card](https://trello.com/c/I3QTMUPQ) | RF03 |
+| #25 | Gravar vídeo e subir no YouTube | João Pedro | 1 | ✅ Concluída | [card](https://trello.com/c/ckTc2ba0) | — |
 
 #### 📉 Burndown
 
@@ -227,9 +252,13 @@ pip install ipykernel matplotlib
 
 #### 📋 Tarefas
 
-| ID | Nome | Responsável(is) | Status | Link | Requisitos Atendidos |
-|---|---|---|---|---|---|
-| -- | | | | | |
+| ID | Nome | Responsável(is) | Pontos | Status | Link | Requisitos Atendidos |
+|---|---|---|---|---|---|---|
+| #31 | Ajustar o modelo para melhorar a predição de atrasos | Carlos, João Pedro | 13 | ✅ Concluída | [card](https://trello.com/c/HgRCF1Ol) | RF02, RNF03 |
+| #23 | Subir a aplicação na nuvem | Adson | 8 | ✅ Concluída | [card](https://trello.com/c/NaIyu5f5) | RNF02 |
+| #30 | Documentação de Machine Learning no GitHub | Carlos | 3 | ✅ Concluída | [card](https://trello.com/c/gcp2V4Gk) | RNF03 |
+| #22 | Documentação da API com Swagger | Carlos | 2 | ✅ Concluída | [card](https://trello.com/c/P91ywp5n) | RNF01 |
+| #24 | Gravar vídeo e subir no YouTube | João Pedro | 1 | ⏳ A fazer | [card](https://trello.com/c/XlK5WEhp) | — |
 
 #### 📉 Burndown
 
